@@ -1,0 +1,23 @@
+node_modules
+Artisans_Project_Checklist.pdf
+user_stories.md
+BACKEND_PLAN.md
+UNIFIED_SCHEMA.md
+
+# Build output
+dist/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# System files
+.DS_Store
+Thumbs.db
