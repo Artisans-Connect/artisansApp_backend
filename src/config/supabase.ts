@@ -7,3 +7,6 @@ export const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE
     persistSession: false,
   },
 });
+
+export const supabase = supabaseAdmin;
+
