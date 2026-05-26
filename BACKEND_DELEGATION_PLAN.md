@@ -497,3 +497,19 @@ All controllers must delegate error responses to Kwabena's global handler.
    - Ensure `supabase/types.ts` is generated and committed to type-check controllers.
    - Run `npm run build` to verify clean compilation before merging.
    - Verify endpoints using the Swagger interface or the shared Postman collection.
+
+---
+
+## 6. PostgreSQL Database Connection Details (For CLI & Migrations)
+To run Supabase migrations, seeds, or connect external SQL clients (e.g., DBeaver, pgAdmin), use these connection parameters (replace `[YOUR-DATABASE-PASSWORD]` with the project database password shared in the password manager):
+
+* **Host**: `db.qdeznjpvkhrxesjykovi.supabase.co`
+* **Port**: `5432`
+* **Database**: `postgres`
+* **User**: `postgres`
+* **Direct Connection URI**:
+  ```
+  postgresql://postgres:[YOUR-DATABASE-PASSWORD]@db.qdeznjpvkhrxesjykovi.supabase.co:5432/postgres
+  ```
+  *(Note: If connecting from an IPv4-only network, configure your client to connect through the Supabase Session Pooler or IPv6 proxy details provided in the settings dashboard).*
+
