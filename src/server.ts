@@ -2,6 +2,7 @@ import app from './app';
 import { logger } from './utils/logger';
 import { env } from './config/env';
 import './config/firebase';
+import { startScheduler } from './services/schedulerService';
 
 const PORT = env.PORT;
 
@@ -16,6 +17,7 @@ async function startServer()
               
             app.listen(PORT, () => {
                 logger(`[Server] Server is running on port ${PORT}`);
+                startScheduler();
             });
         }catch(error){
             logger(`[Server] Error starting server`, error);

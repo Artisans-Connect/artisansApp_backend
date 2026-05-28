@@ -1,20 +1,20 @@
 import { NextFunction, Request, Response } from "express";
-import createHttpError from "http-errors";
 import { supabaseAdmin } from "../config/supabase";
+import { appError } from "../utils/appError";
 
 export const authMiddleware = async (req: Request, _res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers.authorization;
 
     if (!authHeader?.startsWith("Bearer ")) {
-      return next(createHttpError(401, "Missing or invalid authorization header", { code: "UNAUTHORIZED" }));
+      return next(appError(401, "Missing or invalid authorization header", "UNAUTHORIZED"));
     }
 
     const token = authHeader.slice(7).trim();
     const { data, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !data.user) {
-      return next(createHttpError(401, "Invalid or expired token", { code: "UNAUTHORIZED" }));
+      return next(appError(401, "Invalid or expired token", "UNAUTHORIZED"));
     }
 
     req.user = {

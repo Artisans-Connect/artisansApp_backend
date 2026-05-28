@@ -1,19 +1,36 @@
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { catchAsync } from "../utils/catchAsync";
+import * as chatService from "../services/chatService";
+import { paramId } from "../utils/routeParams";
 
 const router = Router();
 
-// Protected chat and conversation list endpoints
-router.get("/", authMiddleware, (req: Request, res: Response) => {
-  res.status(200).json({ success: true, message: "Stub: Conversations list endpoint" });
-});
+router.get(
+  "/",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const conversations = await chatService.listConversations(req.user!.id);
+    res.status(200).json({ success: true, data: conversations });
+  }),
+);
 
-router.get("/:id/messages", authMiddleware, (req: Request, res: Response) => {
-  res.status(200).json({ success: true, message: "Stub: Conversation messages retrieval endpoint" });
-});
+router.get(
+  "/:id/messages",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const messages = await chatService.getMessages(req.user!.id, paramId(req.params.id));
+    res.status(200).json({ success: true, data: messages });
+  }),
+);
 
-router.post("/:id/messages", authMiddleware, (req: Request, res: Response) => {
-  res.status(200).json({ success: true, message: "Stub: Send message endpoint" });
-});
+router.post(
+  "/:id/messages",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const message = await chatService.sendMessage(req.user!.id, paramId(req.params.id), req.body);
+    res.status(201).json({ success: true, data: message });
+  }),
+);
 
 export default router;
