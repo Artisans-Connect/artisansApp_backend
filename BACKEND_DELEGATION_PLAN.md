@@ -1,515 +1,773 @@
-# Artisans — Express Backend Delegation & Coordination Plan
+# Artisans — Express Backend Delegation & Coordination Plan (v2)
 
-This delegation plan establishes how our team (**Kwabena, Peniel, and Nhyira**) will collaborate on the Express.js backend. Drawing inspiration from the frontend modularity model in `artisansApp_frontend` (which split the app into `auth`, `client`, `worker`, and `shared` modules), this plan divides the backend milestones into distinct, loosely-coupled modules to maximize parallel development and eliminate merge conflicts.
+> **Revised 2026-05-28** after full frontend gap analysis.
+> Previous plan superseded. This is the single source of truth for backend work.
+
+This plan establishes how our team (**Kwabena, Peniel, and Nhyira**) will collaborate on the Express.js backend. It is based on a deep analysis of the actual Flutter frontend screens, models, and data flows.
 
 ---
 
-## 1. Modular Architecture & Directory Design
+## 1. What Already Exists (Kwabena's Foundation)
 
-To ensure team members can work independently without blocking each other or causing git conflicts, the Express application is structured around a **Domain-Driven Directory Layout**. 
+The following code is **already built, compiled, and merged to `main`**. Do NOT rewrite these files — only extend them as instructed.
+
+| Layer | Files | Owner |
+|-------|-------|-------|
+| Config | `src/config/env.ts`, `firebase.ts`, `supabase.ts` | Kwabena |
+| Middleware | `src/middleware/auth.ts`, `globalerrorHandler.ts` | Kwabena |
+| Route Registry | `src/routes/index.ts` (mounts jobs, workers, conversations) | Kwabena |
+| Jobs | `src/routes/jobs.ts`, `src/services/jobsService.ts` (create, cancel, complete) | Kwabena |
+| Workers | `src/routes/workers.ts`, `src/services/workersService.ts` (location, availability, nearby, accept, decline) | Kwabena |
+| Chat | `src/routes/chat.ts`, `src/services/chatService.ts` (list, messages, send) | Kwabena |
+| Matching Engine | `src/services/matchingService.ts` (multi-round dispatch) | Kwabena |
+| Notifications | `src/services/notifyService.ts` (6 notification types) | Kwabena |
+| Validators | `src/validators/jobs.validator.ts`, `workers.validator.ts`, `chat.validator.ts` | Kwabena |
+| Utils | `src/utils/haversine.ts`, `appError.ts`, `routeParams.ts`, `catchAsync.ts` | Kwabena |
+| Database | `supabase/migrations/20260528000000_init_schema.sql`, `supabase/types.ts` | Kwabena |
+
+---
+
+## 2. Modular Architecture & Directory Design
+
+After all work is complete, the directory will look like this. Items marked 🆕 or 🔧 are what needs to be built/extended.
 
 ```
 artisansApp_backend/
 ├── src/
-│   ├── config/              # Central configuration and environment schemas
-│   │   ├── env.ts           # Zod schema validation for environment variables (Kwabena)
-│   │   ├── firebase.ts      # Firebase App initialisation (Kwabena)
-│   │   └── supabase.ts      # Supabase client initialisation (Kwabena)
-│   ├── middleware/          # Shared security and authentication middleware
-│   │   ├── auth.ts          # Verify JWT and extract user context (Kwabena)
-│   │   ├── rateLimiter.ts   # Rate limiting rules (Kwabena)
-│   │   └── globalerrorHandler.ts # Standard error response maps (Kwabena)
-│   ├── routes/              # Central routing registry and sub-routers
-│   │   ├── index.ts         # Central router mounting all feature sub-routers (Kwabena)
-│   │   ├── jobs.ts          # Client/Jobs feature router (Nhyira)
-│   │   ├── workers.ts       # Worker/Availability feature router (Peniel)
-│   │   └── chat.ts          # Messaging/Chat feature router (Nhyira)
-│   ├── controllers/         # HTTP request/response handling (Separated by owner)
-│   │   ├── jobsController.ts   # Jobs REST endpoints logic (Nhyira)
-│   │   ├── workersController.ts # Workers REST endpoints logic (Peniel)
-│   │   └── chatController.ts   # Chat REST endpoints logic (Nhyira)
-│   ├── services/            # Pure business logic and Supabase CRUD
-│   │   ├── jobsService.ts      # Jobs database CRUD and workflows (Nhyira)
-│   │   ├── workersService.ts   # Worker coordinates and status database calls (Peniel)
-│   │   ├── matchingService.ts  # Proximity search and matching engine logic (Peniel)
-│   │   ├── notifyService.ts    # FCM messaging wrappers (Nhyira)
-│   │   └── chatService.ts      # Chat database CRUD and history fetches (Nhyira)
-│   └── utils/               # Shared helper functions
-│       └── haversine.ts     # Geospatial distance calculator (Peniel)
+│   ├── config/              # ✅ No changes needed
+│   ├── middleware/           # ✅ No changes needed
+│   ├── constants/
+│   │   └── enums.ts         # ✅ No changes needed
+│   ├── routes/
+│   │   ├── index.ts         # 🔧 Mount profiles, categories, reviews (Kwabena)
+│   │   ├── profiles.ts      # 🆕 Kwabena
+│   │   ├── categories.ts    # 🆕 Kwabena
+│   │   ├── jobs.ts          # 🔧 Add GET endpoints (Nhyira)
+│   │   ├── workers.ts       # 🔧 Add profile/history/start endpoints (Peniel)
+│   │   ├── reviews.ts       # 🆕 Nhyira
+│   │   └── chat.ts          # ✅ No changes needed
+│   ├── services/
+│   │   ├── profilesService.ts   # 🆕 Kwabena
+│   │   ├── categoriesService.ts # 🆕 Kwabena
+│   │   ├── jobsService.ts       # 🔧 Add getMyJobs, getJobById (Nhyira)
+│   │   ├── workersService.ts    # 🔧 Add profile update, active job, start, history (Peniel)
+│   │   ├── reviewsService.ts    # 🆕 Nhyira
+│   │   ├── matchingService.ts   # ✅ No changes
+│   │   ├── notifyService.ts     # ✅ No changes
+│   │   ├── chatService.ts       # ✅ No changes
+│   │   └── schedulerService.ts  # ✅ No changes
+│   ├── validators/
+│   │   ├── profiles.validator.ts # 🆕 Kwabena
+│   │   ├── reviews.validator.ts  # 🆕 Nhyira
+│   │   ├── workers.validator.ts  # 🔧 Add updateWorkerProfileSchema (Peniel)
+│   │   ├── jobs.validator.ts     # ✅ No changes
+│   │   └── chat.validator.ts     # ✅ No changes
+│   └── utils/               # ✅ No changes needed
+└── supabase/
+    ├── migrations/           # ✅ Schema exists
+    ├── seeds/                # 🆕 categories seed (Kwabena)
+    └── types.ts              # ✅ Generated
 ```
 
-### Loose Coupling Rules:
-1. **Isolated Routing Files**: Do not add routes for different modules to a single, monolithic file. Each module owner must implement their routes in their assigned routing file under `src/routes/` (e.g., `jobs.ts` or `workers.ts`).
-2. **Central Router Registry**: The only shared routing file is `src/routes/index.ts`. It acts as the gateway and mounts each router. Feature developers will only touch this file once to register their router.
-3. **No Direct Controller Inter-dependencies**: Controllers in one module must not import controllers from another module. If cross-communication is needed, it must happen through services (e.g., the worker accept endpoint calling `matchingService` to trigger re-dispatch).
-4. **Compile-time Types**: All database interfaces must use generated types from `supabase/types.ts` via the Supabase client.
+### Loose Coupling Rules (Unchanged)
+1. **Isolated Routing Files**: Each module owner implements routes in their assigned file under `src/routes/`.
+2. **Central Router Registry**: Only `src/routes/index.ts` mounts routers. Feature developers touch this file once.
+3. **No Direct Controller Inter-dependencies**: Cross-module communication must happen through services.
+4. **Compile-time Types**: All DB interfaces must use generated types from `supabase/types.ts`.
 
 ---
 
-## 2. Secrets & Configurations Protocol
+## 3. Secrets & Configurations Protocol (Unchanged)
 
-To ensure credential security, prevent key leaks, and enforce standard local environments, **Kwabena** is designated as the **Secrets & Configuration Officer**.
+**Kwabena** remains the Secrets & Configuration Officer.
 
-### Secrets Officer Responsibilities:
-* **Schema Enforcement**: Maintain and update `src/config/env.ts` using Zod to enforce that the server fails fast on startup if any required environment variable is missing or malformed.
-* **Credential Sharing**: Own the secure distribution of credentials (e.g., Supabase service role keys, FCM service account file JSON). These must **NEVER** be committed to Git or sent over insecure channels (like public Discord/Slack). They should be shared via encrypted secure notes or a shared team password manager vault.
-* **Environment Template**: Maintain the public template `.env.example` at the repository root. Whenever a teammate introduces a new dependency requiring environment configuration, they must coordinate with Kwabena to update the Zod schema and `.env.example`.
-* **Repository Safety**: Periodically audit the codebase and git history to ensure no developer has committed `.env` files or hardcoded API keys.
+* Maintains `src/config/env.ts` (Zod schema for env vars).
+* Maintains `.env.example` at the repository root.
+* Credentials are **never** committed to Git.
+* Environment variables already configured: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FIREBASE_SERVICE_ACCOUNT_BASE64`.
 
 ---
 
-## 3. Developer Blueprints: How to Build Your Module
+## 4. Developer Blueprints: How to Build Your Module
 
-To make implementation seamless, follow the code structures below for controllers, services, and route definitions.
+### 👤 Kwabena — Profiles + Categories (Phase 0 — BLOCKING)
 
-### 👤 Nhyira — Jobs Module Blueprint
+Everything else is blocked until these endpoints exist. Without profiles, the frontend cannot persist user data after auth sign-up.
 
-Nhyira is responsible for the client-facing **Jobs Module (Milestone 2)**. 
-
-#### 1. Jobs Service (`src/services/jobsService.ts`)
+#### 4.1 Profiles Validator (`src/validators/profiles.validator.ts`)
 ```typescript
-import { supabase } from "../config/supabase";
-import createHttpError from "http-errors";
-
-export interface CreateJobInput {
-  client_id: string;
-  category_id: string;
-  title: string;
-  description: string;
-  photo_urls: string[];
-  location_lat: number;
-  location_lng: number;
-  address_label: string;
-  job_mode: "asap" | "scheduled" | "flexible";
-  budget_type: "fixed" | "range" | "negotiable";
-  budget_fixed?: number;
-  budget_min?: number;
-  budget_max?: number;
-  scheduled_for?: string;
-  service_type: "home_visit" | "remote" | "either";
-}
-
-export class JobsService {
-  static async createJob(jobData: CreateJobInput) {
-    const { data, error } = await supabase
-      .from("jobs")
-      .insert({
-        ...jobData,
-        status: "searching", // Default starting status for ASAP
-      })
-      .select()
-      .single();
-
-    if (error) {
-      throw createHttpError(500, `Database error: ${error.message}`);
-    }
-    return data;
-  }
-
-  static async cancelJob(jobId: string, clientId: string) {
-    // Confirm ownership
-    const { data: job, error: fetchError } = await supabase
-      .from("jobs")
-      .select("client_id, status")
-      .eq("id", jobId)
-      .single();
-
-    if (fetchError || !job) {
-      throw createHttpError(404, "Job not found");
-    }
-
-    if (job.client_id !== clientId) {
-      throw createHttpError(403, "You are not authorized to cancel this job");
-    }
-
-    const { data, error } = await supabase
-      .from("jobs")
-      .update({ status: "cancelled" })
-      .eq("id", jobId)
-      .select()
-      .single();
-
-    if (error) {
-      throw createHttpError(500, `Database error: ${error.message}`);
-    }
-    return data;
-  }
-}
-```
-
-#### 2. Jobs Controller (`src/controllers/jobsController.ts`)
-```typescript
-import type { Request, Response, NextFunction } from "express";
-import { JobsService } from "../services/jobsService";
 import { z } from "zod";
 
-const createJobSchema = z.object({
-  category_id: z.string().uuid(),
-  title: z.string().min(5).max(80),
-  description: z.string().min(10),
-  photo_urls: z.array(z.string().url()).default([]),
-  location_lat: z.number().min(-90).max(90),
-  location_lng: z.number().min(-180).max(180),
-  address_label: z.string(),
-  job_mode: z.enum(["asap", "scheduled", "flexible"]),
-  budget_type: z.enum(["fixed", "range", "negotiable"]),
-  budget_fixed: z.number().optional(),
-  budget_min: z.number().optional(),
-  budget_max: z.number().optional(),
-  scheduled_for: z.string().datetime().optional(),
-  service_type: z.enum(["home_visit", "remote", "either"]),
+export const createProfileSchema = z.object({
+  full_name: z.string().trim().min(1).max(100),
+  phone: z.string().trim().min(1),
+  role: z.enum(["client", "worker"]),
+  avatar_url: z.string().url().optional(),
+  // Worker-specific fields (only validated if role === "worker")
+  skills: z.array(z.string().trim().min(1)).default([]),
+  hourly_rate: z.number().positive().optional(),
+  rate_type: z.enum(["hourly", "fixed"]).default("hourly"),
+  service_areas: z.array(z.string().trim().min(1)).default([]),
+  bio: z.string().trim().max(500).optional(),
+  experience_band: z.string().trim().optional(),
 });
 
-export class JobsController {
-  static async create(req: Request, res: Response, next: NextFunction) {
-    try {
-      // Validate inputs
-      const validatedData = createJobSchema.parse(req.body);
-      
-      // req.user is populated by Kwabena's authMiddleware
-      const client_id = req.user.id; 
+export const updateProfileSchema = z.object({
+  full_name: z.string().trim().min(1).max(100).optional(),
+  phone: z.string().trim().min(1).optional(),
+  avatar_url: z.string().url().nullable().optional(),
+  bio: z.string().trim().max(500).optional(),
+});
 
-      const newJob = await JobsService.createJob({
-        ...validatedData,
-        client_id,
-      });
+export const fcmTokenSchema = z.object({
+  fcm_token: z.string().trim().min(1),
+});
+```
 
-      res.status(201).json({
-        success: true,
-        data: newJob,
-      });
-    } catch (error) {
-      next(error); // Passes to Kwabena's globalErrorHandler
-    }
+#### 4.2 Profiles Service (`src/services/profilesService.ts`)
+```typescript
+import { supabaseAdmin } from "../config/supabase";
+import { appError } from "../utils/appError";
+import {
+  createProfileSchema,
+  updateProfileSchema,
+  fcmTokenSchema,
+} from "../validators/profiles.validator";
+
+export async function createProfile(userId: string, body: unknown) {
+  const parsed = createProfileSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid profile", "VALIDATION_ERROR");
   }
 
-  static async cancel(req: Request, res: Response, next: NextFunction) {
-    try {
-      const jobId = req.params.id;
-      const clientId = req.user.id;
+  const input = parsed.data;
 
-      const cancelledJob = await JobsService.cancelJob(jobId, clientId);
+  // 1. Insert into profiles table
+  const { error: profileError } = await supabaseAdmin
+    .from("profiles")
+    .insert({
+      id: userId,
+      full_name: input.full_name,
+      phone: input.phone,
+      role: input.role,
+      avatar_url: input.avatar_url ?? null,
+    });
 
-      res.status(200).json({
-        success: true,
-        data: cancelledJob,
+  if (profileError) throw appError(500, profileError.message, "PROFILE_CREATE_FAILED");
+
+  // 2. If worker, also insert into workers table
+  if (input.role === "worker") {
+    const { error: workerError } = await supabaseAdmin
+      .from("workers")
+      .insert({
+        id: userId,
+        skills: input.skills,
+        hourly_rate: input.hourly_rate ?? null,
+        rate_type: input.rate_type,
+        service_areas: input.service_areas,
       });
-    } catch (error) {
-      next(error);
-    }
+
+    if (workerError) throw appError(500, workerError.message, "WORKER_PROFILE_CREATE_FAILED");
   }
+
+  return getProfile(userId);
 }
+
+export async function getProfile(userId: string) {
+  const { data: profile, error } = await supabaseAdmin
+    .from("profiles")
+    .select("*")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "PROFILE_FETCH_FAILED");
+  if (!profile) throw appError(404, "Profile not found", "PROFILE_NOT_FOUND");
+
+  // If worker, join worker data
+  if (profile.role === "worker") {
+    const { data: worker } = await supabaseAdmin
+      .from("workers")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+
+    return { ...profile, worker: worker ?? null };
+  }
+
+  return { ...profile, worker: null };
+}
+
+export async function updateProfile(userId: string, body: unknown) {
+  const parsed = updateProfileSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid update", "VALIDATION_ERROR");
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .update({ ...parsed.data, updated_at: new Date().toISOString() })
+    .eq("id", userId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "PROFILE_UPDATE_FAILED");
+  return data;
+}
+
+export async function updateFcmToken(userId: string, body: unknown) {
+  const parsed = fcmTokenSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, "Invalid FCM token", "VALIDATION_ERROR");
+  }
+
+  const { error } = await supabaseAdmin
+    .from("profiles")
+    .update({ fcm_token: parsed.data.fcm_token })
+    .eq("id", userId);
+
+  if (error) throw appError(500, error.message, "FCM_TOKEN_UPDATE_FAILED");
+  return { success: true };
+}
+```
+
+#### 4.3 Profiles Route (`src/routes/profiles.ts`)
+```typescript
+import { Router, type Request, type Response } from "express";
+import { authMiddleware } from "../middleware/auth";
+import { catchAsync } from "../utils/catchAsync";
+import * as profilesService from "../services/profilesService";
+
+const router = Router();
+
+router.post(
+  "/",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const profile = await profilesService.createProfile(req.user!.id, req.body);
+    res.status(201).json({ success: true, data: profile });
+  }),
+);
+
+router.get(
+  "/me",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const profile = await profilesService.getProfile(req.user!.id);
+    res.status(200).json({ success: true, data: profile });
+  }),
+);
+
+router.put(
+  "/me",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const profile = await profilesService.updateProfile(req.user!.id, req.body);
+    res.status(200).json({ success: true, data: profile });
+  }),
+);
+
+router.put(
+  "/me/fcm-token",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await profilesService.updateFcmToken(req.user!.id, req.body);
+    res.status(200).json(result);
+  }),
+);
+
+export default router;
+```
+
+#### 4.4 Categories Service (`src/services/categoriesService.ts`)
+```typescript
+import { supabaseAdmin } from "../config/supabase";
+import { appError } from "../utils/appError";
+
+export async function listCategories() {
+  const { data, error } = await supabaseAdmin
+    .from("categories")
+    .select("id, name, slug, icon_name, sort_order")
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true });
+
+  if (error) throw appError(500, error.message, "CATEGORIES_FETCH_FAILED");
+  return data ?? [];
+}
+```
+
+#### 4.5 Categories Route (`src/routes/categories.ts`)
+```typescript
+import { Router, type Request, type Response } from "express";
+import { catchAsync } from "../utils/catchAsync";
+import * as categoriesService from "../services/categoriesService";
+
+const router = Router();
+
+// Public endpoint — no auth required
+router.get(
+  "/",
+  catchAsync(async (_req: Request, res: Response) => {
+    const categories = await categoriesService.listCategories();
+    res.status(200).json({ success: true, data: categories });
+  }),
+);
+
+export default router;
+```
+
+#### 4.6 Mount New Routers (`src/routes/index.ts` — UPDATE)
+```typescript
+import { Router } from "express";
+import profilesRouter from "./profiles";
+import categoriesRouter from "./categories";
+import jobsRouter from "./jobs";
+import workersRouter from "./workers";
+import reviewsRouter from "./reviews";
+import chatRouter from "./chat";
+
+const router = Router();
+
+// Mount modules
+router.use("/profiles", profilesRouter);
+router.use("/categories", categoriesRouter);
+router.use("/jobs", jobsRouter);
+router.use("/workers", workersRouter);
+router.use("/reviews", reviewsRouter);
+router.use("/conversations", chatRouter);
+
+export default router;
+```
+
+#### 4.7 Categories Seed Data (`supabase/seeds/categories.sql`)
+```sql
+INSERT INTO categories (name, slug, icon_name, sort_order) VALUES
+  ('Plumbing',      'plumbing',      'plumbing',      1),
+  ('Electrical',    'electrical',    'electrical_services', 2),
+  ('Carpentry',     'carpentry',     'carpenter',     3),
+  ('Cleaning',      'cleaning',      'cleaning_services', 4),
+  ('Painting',      'painting',      'format_paint',  5),
+  ('Construction',  'construction',  'construction',  6),
+  ('HVAC',          'hvac',          'hvac',          7),
+  ('Landscaping',   'landscaping',   'grass',         8)
+ON CONFLICT (slug) DO NOTHING;
 ```
 
 ---
 
-### 👤 Peniel — Workers Module & Matching Engine Blueprint
+### 👤 Peniel — Workers Module Extensions (Phase 1)
 
-Peniel is responsible for the **Workers Module (Milestone 3)** and the **Matching Engine (Milestone 4)**.
+Peniel extends the existing `workers.ts` and `workersService.ts` files. These endpoints complete the worker's in-app job lifecycle.
 
-#### 1. Worker Location & Availability Service (`src/services/workersService.ts`)
+#### 5.1 New Validator (Add to `src/validators/workers.validator.ts`)
 ```typescript
-import { supabase } from "../config/supabase";
-import createHttpError from "http-errors";
+// Add this to the existing file — do not overwrite existing schemas
 
-export class WorkersService {
-  static async updateLocation(workerId: string, lat: number, lng: number) {
-    const { error } = await supabase
-      .from("workers")
-      .update({
-        current_lat: lat,
-        current_lng: lng,
-        location_at: new Date().toISOString(),
-      })
-      .eq("id", workerId);
+export const updateWorkerProfileSchema = z.object({
+  skills: z.array(z.string().trim().min(1)).optional(),
+  hourly_rate: z.number().positive().optional(),
+  rate_type: z.enum(["hourly", "fixed"]).optional(),
+  service_areas: z.array(z.string().trim().min(1)).optional(),
+});
+```
 
-    if (error) {
-      throw createHttpError(500, `Failed to update coordinates: ${error.message}`);
-    }
+#### 5.2 New Service Functions (Add to `src/services/workersService.ts`)
+```typescript
+// Add these functions to the existing file
+
+export async function updateWorkerProfile(userId: string, body: unknown) {
+  const parsed = updateWorkerProfileSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid worker profile", "VALIDATION_ERROR");
   }
 
-  static async toggleAvailability(workerId: string, isAvailable: boolean) {
-    const updatePayload: Record<string, any> = { is_available: isAvailable };
-    
-    // If going offline, wipe location timestamp to exclude from nearby searches
-    if (!isAvailable) {
-      updatePayload.location_at = null;
-    }
+  const patch: Record<string, unknown> = { ...parsed.data, updated_at: new Date().toISOString() };
 
-    const { data, error } = await supabase
-      .from("workers")
-      .update(updatePayload)
-      .eq("id", workerId)
-      .select()
-      .single();
+  const { data, error } = await supabaseAdmin
+    .from("workers")
+    .update(patch)
+    .eq("id", userId)
+    .select()
+    .single();
 
-    if (error) {
-      throw createHttpError(500, `Failed to update availability: ${error.message}`);
-    }
-    return data;
-  }
+  if (error) throw appError(500, error.message, "WORKER_PROFILE_UPDATE_FAILED");
+  return data;
+}
+
+export async function getActiveJob(userId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .select("*, profiles!jobs_client_id_fkey(full_name, avatar_url, phone)")
+    .eq("worker_id", userId)
+    .in("status", [JOB_STATUS.MATCHED, JOB_STATUS.IN_PROGRESS])
+    .order("updated_at", { ascending: false })
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "ACTIVE_JOB_FETCH_FAILED");
+  return data; // null if no active job
+}
+
+export async function startJob(userId: string, jobId: string) {
+  // Atomic: only transition matched → in_progress if worker owns it
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .update({ status: JOB_STATUS.IN_PROGRESS, updated_at: new Date().toISOString() })
+    .eq("id", jobId)
+    .eq("worker_id", userId)
+    .eq("status", JOB_STATUS.MATCHED)
+    .select()
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "JOB_START_FAILED");
+  if (!data) throw appError(409, "Job cannot be started — wrong status or not assigned to you", "INVALID_JOB_STATE");
+
+  await notifyService.notifyJobStarted(data.client_id);
+
+  return data;
+}
+
+export async function getHistory(userId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .select("id, title, status, budget_fixed, budget_min, budget_max, updated_at, profiles!jobs_client_id_fkey(full_name, avatar_url)")
+    .eq("worker_id", userId)
+    .in("status", [JOB_STATUS.COMPLETED, JOB_STATUS.CANCELLED])
+    .order("updated_at", { ascending: false });
+
+  if (error) throw appError(500, error.message, "HISTORY_FETCH_FAILED");
+  return data ?? [];
 }
 ```
 
-#### 2. Atomic Accept Service Logic (`src/services/workersService.ts`)
-*Crucial*: To prevent double-acceptance by two workers simultaneously, Peniel must implement an **atomic conditional update** (checking status and updating in a single SQL operation).
-
+> **Note**: `notifyService.notifyJobStarted` needs to be added to `notifyService.ts`:
 ```typescript
-  static async acceptJob(jobId: string, workerId: string) {
-    // Atomic update using Supabase's filter queries
-    const { data, error } = await supabase
-      .from("jobs")
-      .update({
-        status: "matched",
-        worker_id: workerId,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", jobId)
-      .in("status", ["searching", "matching"]) // Can only accept if currently searching/matching
-      .select();
-
-    if (error) {
-      throw createHttpError(500, `Database error: ${error.message}`);
-    }
-
-    // If no row was updated, it means another worker accepted it first or it expired
-    if (!data || data.length === 0) {
-      throw createHttpError(409, "Conflict: Job has already been accepted by another artisan or has expired.");
-    }
-
-    return data[0];
-  }
-```
-
-#### 3. Haversine Helper (`src/utils/haversine.ts`)
-```typescript
-/**
- * Calculates the great-circle distance between two points on the Earth's surface
- * using the Haversine formula. Returns distance in kilometers.
- */
-export function calculateDistance(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number {
-  const R = 6371; // Earth radius in km
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-      
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+export async function notifyJobStarted(clientId: string): Promise<void> {
+  await sendToUser(clientId, {
+    title: "Artisan on the way",
+    body: "Your artisan has started the job",
+    data: { type: "job_started" },
+  });
 }
 ```
 
-#### 4. Workers Controller (`src/controllers/workersController.ts`)
+#### 5.3 New Routes (Add to `src/routes/workers.ts`)
 ```typescript
-import type { Request, Response, NextFunction } from "express";
-import { WorkersService } from "../services/workersService";
+// Add these routes to the existing router — do not overwrite existing routes
+
+router.put(
+  "/me/profile",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const worker = await workersService.updateWorkerProfile(req.user!.id, req.body);
+    res.status(200).json({ success: true, data: worker });
+  }),
+);
+
+router.get(
+  "/me/active-job",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await workersService.getActiveJob(req.user!.id);
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.post(
+  "/:jobId/start",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await workersService.startJob(req.user!.id, paramId(req.params.jobId));
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.get(
+  "/me/history",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const jobs = await workersService.getHistory(req.user!.id);
+    res.status(200).json({ success: true, data: jobs });
+  }),
+);
+```
+
+---
+
+### 👤 Nhyira — Jobs Extensions + Reviews (Phase 1–2)
+
+Nhyira extends the existing `jobs.ts` and `jobsService.ts`, and creates the new Reviews module.
+
+#### 6.1 New Service Functions (Add to `src/services/jobsService.ts`)
+```typescript
+// Add these functions to the existing file
+
+export async function getMyJobs(userId: string, statusFilter?: string[]) {
+  let query = supabaseAdmin
+    .from("jobs")
+    .select("id, title, status, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, profiles!jobs_worker_id_fkey(full_name, avatar_url)")
+    .eq("client_id", userId)
+    .order("created_at", { ascending: false });
+
+  if (statusFilter && statusFilter.length > 0) {
+    query = query.in("status", statusFilter);
+  }
+
+  const { data, error } = await query;
+  if (error) throw appError(500, error.message, "JOBS_FETCH_FAILED");
+  return data ?? [];
+}
+
+export async function getJobById(userId: string, jobId: string) {
+  const { data: job, error } = await supabaseAdmin
+    .from("jobs")
+    .select("*, profiles!jobs_client_id_fkey(full_name, avatar_url, phone), profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "JOB_FETCH_FAILED");
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+
+  // Only participants can view a job
+  if (job.client_id !== userId && job.worker_id !== userId) {
+    throw appError(403, "Not authorized to view this job", "FORBIDDEN");
+  }
+
+  return job;
+}
+```
+
+#### 6.2 New Routes (Add to `src/routes/jobs.ts`)
+```typescript
+// Add these routes to the existing router — do not overwrite existing routes
+
+router.get(
+  "/mine",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const statusParam = req.query.status as string | undefined;
+    const statusFilter = statusParam ? statusParam.split(",") : undefined;
+    const jobs = await jobsService.getMyJobs(req.user!.id, statusFilter);
+    res.status(200).json({ success: true, data: jobs });
+  }),
+);
+
+router.get(
+  "/:id",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await jobsService.getJobById(req.user!.id, paramId(req.params.id));
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+```
+
+> **IMPORTANT**: Place `GET /mine` **before** `GET /:id` in the router so that Express doesn't interpret "mine" as a UUID param.
+
+#### 6.3 Reviews Validator (`src/validators/reviews.validator.ts`)
+```typescript
 import { z } from "zod";
 
-const locationSchema = z.object({
-  lat: z.number().min(-90).max(90),
-  lng: z.number().min(-180).max(180),
+export const createReviewSchema = z.object({
+  job_id: z.string().uuid(),
+  worker_id: z.string().uuid(),
+  rating: z.number().int().min(1).max(5),
+  comment: z.string().trim().max(500).optional(),
 });
-
-export class WorkersController {
-  static async updateLocation(req: Request, res: Response, next: NextFunction) {
-    try {
-      const { lat, lng } = locationSchema.parse(req.body);
-      const workerId = req.user.id;
-
-      await WorkersService.updateLocation(workerId, lat, lng);
-
-      res.status(200).json({ success: true, message: "Location updated successfully." });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  static async accept(req: Request, res: Response, next: NextFunction) {
-    try {
-      const jobId = req.params.jobId;
-      const workerId = req.user.id;
-
-      const acceptedJob = await WorkersService.acceptJob(jobId, workerId);
-
-      res.status(200).json({
-        success: true,
-        data: acceptedJob,
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-}
 ```
 
----
-
-### 👤 Nhyira — Notifications & Chat Blueprints
-
-Nhyira is responsible for the **FCM Notification Service (Milestone 5)** and the **Chat Module (Milestone 6.5)**.
-
-#### 1. Notification Service (`src/services/notifyService.ts`)
+#### 6.4 Reviews Service (`src/services/reviewsService.ts`)
 ```typescript
-import admin from "../config/firebase";
-import { supabase } from "../config/supabase";
+import { supabaseAdmin } from "../config/supabase";
+import { appError } from "../utils/appError";
+import { createReviewSchema } from "../validators/reviews.validator";
 
-export class NotifyService {
-  /**
-   * Sends a push notification to a profile's saved FCM token.
-   * Logs any failures rather than crashing the HTTP request.
-   */
-  static async sendToUser(userId: string, title: string, body: string, dataPayload: Record<string, string> = {}) {
-    try {
-      // 1. Fetch user FCM token from Supabase profiles
-      const { data: profile, error } = await supabase
-        .from("profiles")
-        .select("fcm_token")
-        .eq("id", userId)
-        .single();
-
-      if (error || !profile?.fcm_token) {
-        console.warn(`Could not send notification: User ${userId} has no registered FCM token.`);
-        return;
-      }
-
-      // 2. Dispatch payload via firebase-admin
-      const message = {
-        notification: {
-          title,
-          body,
-        },
-        data: dataPayload,
-        token: profile.fcm_token,
-      };
-
-      const response = await admin.messaging().send(message);
-      console.log(`Notification sent successfully to ${userId}: ${response}`);
-    } catch (err: any) {
-      // Log errors safely to server diagnostics
-      console.error(`Firebase messaging failure for user ${userId}:`, err.message);
-    }
+export async function createReview(userId: string, body: unknown) {
+  const parsed = createReviewSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid review", "VALIDATION_ERROR");
   }
+
+  const input = parsed.data;
+
+  // Verify: job exists, is completed, and user is the client
+  const { data: job } = await supabaseAdmin
+    .from("jobs")
+    .select("id, client_id, worker_id, status")
+    .eq("id", input.job_id)
+    .maybeSingle();
+
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+  if (job.status !== "completed") throw appError(400, "Can only review completed jobs", "JOB_NOT_COMPLETED");
+  if (job.client_id !== userId) throw appError(403, "Only the client can review", "FORBIDDEN");
+  if (job.worker_id !== input.worker_id) throw appError(400, "Worker ID does not match the job", "WORKER_MISMATCH");
+
+  const { data, error } = await supabaseAdmin
+    .from("reviews")
+    .insert({
+      job_id: input.job_id,
+      reviewer_id: userId,
+      worker_id: input.worker_id,
+      rating: input.rating,
+      comment: input.comment ?? null,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === "23505") {
+      throw appError(409, "You have already reviewed this job", "REVIEW_EXISTS");
+    }
+    throw appError(500, error.message, "REVIEW_CREATE_FAILED");
+  }
+
+  return data;
+}
+
+export async function getWorkerReviews(workerId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("reviews")
+    .select("id, rating, comment, created_at, profiles!reviews_reviewer_id_fkey(full_name, avatar_url)")
+    .eq("worker_id", workerId)
+    .order("created_at", { ascending: false });
+
+  if (error) throw appError(500, error.message, "REVIEWS_FETCH_FAILED");
+  return data ?? [];
 }
 ```
 
-#### 2. Chat Service (`src/services/chatService.ts`)
+#### 6.5 Reviews Route (`src/routes/reviews.ts`)
 ```typescript
-import { supabase } from "../config/supabase";
-import createHttpError from "http-errors";
+import { Router, type Request, type Response } from "express";
+import { authMiddleware } from "../middleware/auth";
+import { catchAsync } from "../utils/catchAsync";
+import * as reviewsService from "../services/reviewsService";
+import { paramId } from "../utils/routeParams";
 
-export class ChatService {
-  /**
-   * Fetches conversations for the logged in user based on profile role.
-   */
-  static async getConversations(userId: string) {
-    // Querying active message threads involving the user
-    const { data, error } = await supabase
-      .from("messages")
-      .select("job_id, sender_id, content, created_at")
-      .or(`sender_id.eq.${userId}`); // Needs adaptation based on DB schemas
+const router = Router();
 
-    if (error) {
-      throw createHttpError(500, `Failed to retrieve conversations: ${error.message}`);
-    }
-    return data;
-  }
+router.post(
+  "/",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const review = await reviewsService.createReview(req.user!.id, req.body);
+    res.status(201).json({ success: true, data: review });
+  }),
+);
 
-  /**
-   * Sends an in-app message and dispatches an FCM notification to the receiver.
-   */
-  static async sendMessage(jobId: string, senderId: string, receiverId: string, content: string, image_urls: string[] = []) {
-    const { data: message, error } = await supabase
-      .from("messages")
-      .insert({
-        job_id: jobId,
-        sender_id: senderId,
-        content,
-        image_urls,
-      })
-      .select()
-      .single();
+router.get(
+  "/worker/:workerId",
+  catchAsync(async (req: Request, res: Response) => {
+    const reviews = await reviewsService.getWorkerReviews(paramId(req.params.workerId));
+    res.status(200).json({ success: true, data: reviews });
+  }),
+);
 
-    if (error) {
-      throw createHttpError(500, `Failed to send message: ${error.message}`);
-    }
-
-    // Trigger asynchronous background notification dispatch
-    NotifyService.sendToUser(
-      receiverId, 
-      "New Message", 
-      content.length > 50 ? `${content.substring(0, 47)}...` : content,
-      { jobId, click_action: "FLUTTER_NOTIFICATION_CLICK" }
-    );
-
-    return message;
-  }
-}
+export default router;
 ```
 
 ---
 
-## 5. Standardized Integration Rules
+## 7. API Endpoint Summary (Full Reference)
 
-To ensure our separately built modules unify seamlessly on execution, we agree to these design contracts:
+### Profiles — Kwabena (Phase 0)
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `POST` | `/api/profiles` | ✅ | Create profile after sign-up |
+| `GET` | `/api/profiles/me` | ✅ | Get own profile (joined with worker data) |
+| `PUT` | `/api/profiles/me` | ✅ | Update profile fields |
+| `PUT` | `/api/profiles/me/fcm-token` | ✅ | Store FCM push token |
 
-### 5.1 Standard Response & Error Format
-All controllers must delegate error responses to Kwabena's global handler.
+### Categories — Kwabena (Phase 0)
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `GET` | `/api/categories` | ❌ | List active categories |
 
-* **Format for 2xx Success**:
-  ```json
-  {
-    "success": true,
-    "data": { ... }
-  }
-  ```
+### Jobs — Kwabena (existing) + Nhyira (extensions)
+| Method | Path | Auth | Purpose | Owner |
+|--------|------|------|---------|-------|
+| `POST` | `/api/jobs/create` | ✅ | Create a new job | ✅ Exists |
+| `POST` | `/api/jobs/:id/cancel` | ✅ | Cancel a job | ✅ Exists |
+| `POST` | `/api/jobs/:id/complete` | ✅ | Mark job as completed | ✅ Exists |
+| `GET` | `/api/jobs/mine` | ✅ | List client's own jobs | 🆕 Nhyira |
+| `GET` | `/api/jobs/:id` | ✅ | Get single job details | 🆕 Nhyira |
 
-* **Format for 4xx/5xx Errors** (automatically processed by `globalerrorHandler.ts`):
-  ```json
-  {
-    "error": "Short human-readable error description here.",
-    "code": "ERR_SPECIFIC_CODE"
-  }
-  ```
-  *Rule*: Teammates must throw standard `http-errors` containing exact status codes rather than returning custom raw status numbers.
+### Workers — Kwabena (existing) + Peniel (extensions)
+| Method | Path | Auth | Purpose | Owner |
+|--------|------|------|---------|-------|
+| `PUT` | `/api/workers/location` | ✅ | Update GPS coordinates | ✅ Exists |
+| `PUT` | `/api/workers/availability` | ✅ | Toggle is_available | ✅ Exists |
+| `GET` | `/api/workers/nearby` | ✅ | Find nearby workers | ✅ Exists |
+| `POST` | `/api/workers/accept/:jobId` | ✅ | Accept a job (atomic) | ✅ Exists |
+| `POST` | `/api/workers/decline/:jobId` | ✅ | Decline a job | ✅ Exists |
+| `PUT` | `/api/workers/me/profile` | ✅ | Update worker skills/rate/areas | 🆕 Peniel |
+| `GET` | `/api/workers/me/active-job` | ✅ | Get current active job | 🆕 Peniel |
+| `POST` | `/api/workers/:jobId/start` | ✅ | Start a matched job | 🆕 Peniel |
+| `GET` | `/api/workers/me/history` | ✅ | Get past jobs | 🆕 Peniel |
 
-### 5.2 Git Collaboration Rules
-1. **Branch Names**: Standardize branch prefixes based on feature mapping:
-   * Kwabena: `feat/backend/core-foundation`
-   * Peniel: `feat/backend/workers-matching`
-   * Nhyira: `feat/backend/jobs-messaging`
-2. **Double-Check Before Pushing**:
-   ```bash
-   # Confirm that no local .env or generated build outputs are staged
-   git status
-   ```
-3. **Weekly Integration Checks**:
-   At the end of each milestone cycle, team members will run the verification checklist together:
-   - Ensure `supabase/types.ts` is generated and committed to type-check controllers.
-   - Run `npm run build` to verify clean compilation before merging.
-   - Verify endpoints using the Swagger interface or the shared Postman collection.
+### Reviews — Nhyira (Phase 2)
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `POST` | `/api/reviews` | ✅ | Submit a review |
+| `GET` | `/api/reviews/worker/:workerId` | ❌ | Get worker's reviews |
+
+### Chat — ✅ Complete (No Changes)
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `GET` | `/api/conversations` | ✅ | List conversations |
+| `GET` | `/api/conversations/:id/messages` | ✅ | Get messages |
+| `POST` | `/api/conversations/:id/messages` | ✅ | Send a message |
 
 ---
 
-## 6. PostgreSQL Database Connection Details (For CLI & Migrations)
-To run Supabase migrations, seeds, or connect external SQL clients (e.g., DBeaver, pgAdmin), use these connection parameters (replace `[YOUR-DATABASE-PASSWORD]` with the project database password shared in the password manager):
+## 8. Standardized Integration Rules (Unchanged)
+
+### 8.1 Standard Response & Error Format
+* **Success**: `{ "success": true, "data": { ... } }`
+* **Error**: `{ "error": "Human-readable message", "code": "ERR_SPECIFIC_CODE" }`
+* Throw `appError(statusCode, message, code)` — the global error handler processes it.
+
+### 8.2 Git Collaboration Rules
+1. **Branch Names**:
+   * Kwabena: `feat/backend/profiles-categories`
+   * Peniel: `feat/backend/workers-extensions`
+   * Nhyira: `feat/backend/jobs-reviews`
+2. **Before pushing**: `git status` — confirm no `.env` files staged.
+3. **Before merging**: `npm run build` — verify clean compilation.
+
+---
+
+## 9. Execution Phases
+
+```
+Phase 0 — BLOCKING (Kwabena only):
+  ├── Profiles module (create, read, update, fcm-token)
+  ├── Categories module (list)
+  ├── Mount new routers in index.ts
+  ├── Seed categories table
+  └── npm run build → verify
+
+Phase 1 — Core Flows (Peniel + Nhyira, in parallel):
+  ├── Peniel: PUT /workers/me/profile
+  ├── Peniel: GET /workers/me/active-job
+  ├── Peniel: POST /workers/:jobId/start
+  ├── Peniel: GET /workers/me/history
+  ├── Nhyira: GET /jobs/mine
+  ├── Nhyira: GET /jobs/:id
+  └── npm run build → verify
+
+Phase 2 — Completion Features (Nhyira):
+  ├── Reviews module (create + list by worker)
+  └── npm run build → verify
+```
+
+---
+
+## 10. PostgreSQL Database Connection Details
 
 * **Host**: `db.qdeznjpvkhrxesjykovi.supabase.co`
 * **Port**: `5432`
 * **Database**: `postgres`
 * **User**: `postgres`
-* **Direct Connection URI**:
+* **Connection URI**:
   ```
   postgresql://postgres:[YOUR-DATABASE-PASSWORD]@db.qdeznjpvkhrxesjykovi.supabase.co:5432/postgres
   ```
-  *(Note: If connecting from an IPv4-only network, configure your client to connect through the Supabase Session Pooler or IPv6 proxy details provided in the settings dashboard).*
-
