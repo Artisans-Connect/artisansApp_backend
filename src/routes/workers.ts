@@ -51,4 +51,40 @@ router.post(
   }),
 );
 
+router.put(
+  "/me/profile",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const worker = await workersService.updateWorkerProfile(req.user!.id, req.body);
+    res.status(200).json({ success: true, data: worker });
+  }),
+);
+
+router.get(
+  "/me/active-job",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await workersService.getActiveJob(req.user!.id);
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.get(
+  "/me/history",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const jobs = await workersService.getHistory(req.user!.id);
+    res.status(200).json({ success: true, data: jobs });
+  }),
+);
+
+router.post(
+  "/:jobId/start",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await workersService.startJob(req.user!.id, paramId(req.params.jobId));
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
 export default router;

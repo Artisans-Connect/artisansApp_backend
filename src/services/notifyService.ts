@@ -58,6 +58,14 @@ export async function notifyJobMatched(clientId: string, workerName: string): Pr
   });
 }
 
+export async function notifyJobStarted(clientId: string): Promise<void> {
+  await sendToUser(clientId, {
+    title: "Artisan on the way",
+    body: "Your artisan has started the job",
+    data: { type: "job_started" },
+  });
+}
+
 export async function notifyJobExpired(clientId: string): Promise<void> {
   await sendToUser(clientId, {
     title: "No artisan found",

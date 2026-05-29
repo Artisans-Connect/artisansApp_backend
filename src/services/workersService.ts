@@ -6,6 +6,7 @@ import {
   nearbyWorkersSchema,
   updateAvailabilitySchema,
   updateLocationSchema,
+  updateWorkerProfileSchema,
 } from "../validators/workers.validator";
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
@@ -112,4 +113,70 @@ export async function declineJob(userId: string, jobId: string) {
 
   await matchingService.recordDecline(jobId, userId);
   return { success: true };
+}
+
+export async function updateWorkerProfile(userId: string, body: unknown) {
+  const parsed = updateWorkerProfileSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid worker profile", "VALIDATION_ERROR");
+  }
+
+  const patch: Record<string, unknown> = { ...parsed.data, updated_at: new Date().toISOString() };
+
+  const { data, error } = await supabaseAdmin
+    .from("workers")
+    .update(patch)
+    .eq("id", userId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "WORKER_PROFILE_UPDATE_FAILED");
+  return data;
+}
+
+export async function getActiveJob(userId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .select("*, profiles!jobs_client_id_fkey(full_name, avatar_url, phone)")
+    .eq("worker_id", userId)
+    .in("status", [JOB_STATUS.MATCHED, JOB_STATUS.IN_PROGRESS])
+    .order("updated_at", { ascending: false })
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "ACTIVE_JOB_FETCH_FAILED");
+  return data;
+}
+
+export async function startJob(userId: string, jobId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .update({ status: JOB_STATUS.IN_PROGRESS, updated_at: new Date().toISOString() })
+    .eq("id", jobId)
+    .eq("worker_id", userId)
+    .eq("status", JOB_STATUS.MATCHED)
+    .select()
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "JOB_START_FAILED");
+  if (!data) {
+    throw appError(409, "Job cannot be started — wrong status or not assigned to you", "INVALID_JOB_STATE");
+  }
+
+  await notifyService.notifyJobStarted(data.client_id);
+
+  return data;
+}
+
+export async function getHistory(userId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .select(
+      "id, title, status, budget_fixed, budget_min, budget_max, updated_at, profiles!jobs_client_id_fkey(full_name, avatar_url)",
+    )
+    .eq("worker_id", userId)
+    .in("status", [JOB_STATUS.COMPLETED, JOB_STATUS.CANCELLED])
+    .order("updated_at", { ascending: false });
+
+  if (error) throw appError(500, error.message, "HISTORY_FETCH_FAILED");
+  return data ?? [];
 }

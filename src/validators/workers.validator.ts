@@ -15,3 +15,10 @@ export const nearbyWorkersSchema = z.object({
   lng: z.coerce.number().min(-180).max(180),
   radius_km: z.coerce.number().positive().max(100).default(15),
 });
+
+export const updateWorkerProfileSchema = z.object({
+  skills: z.array(z.string().trim().min(1)).optional(),
+  hourly_rate: z.number().positive().optional(),
+  rate_type: z.enum(["hourly", "fixed"]).optional(),
+  service_areas: z.array(z.string().trim().min(1)).optional(),
+});

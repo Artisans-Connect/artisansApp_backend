@@ -1,14 +1,24 @@
 import admin from "firebase-admin";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { env } from "./env";
 
-if (!admin.apps.length) {
-  const serviceAccountPath = path.resolve(env.FIREBASE_SERVICE_ACCOUNT_PATH);
-  const serviceAccount = JSON.parse(readFileSync(serviceAccountPath, "utf8"));
+function loadServiceAccount(): admin.ServiceAccount {
+  if (env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
+    return JSON.parse(Buffer.from(env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf8"));
+  }
 
+  const serviceAccountPath = path.resolve(env.FIREBASE_SERVICE_ACCOUNT_PATH!);
+  if (!existsSync(serviceAccountPath)) {
+    throw new Error(`Firebase service account file not found: ${serviceAccountPath}`);
+  }
+
+  return JSON.parse(readFileSync(serviceAccountPath, "utf8"));
+}
+
+if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+    credential: admin.credential.cert(loadServiceAccount()),
   });
 }
 
