@@ -90,3 +90,37 @@ export async function completeJob(userId: string, jobId: string) {
 
   return data;
 }
+
+export async function getMyJobs(userId: string, statusFilter?: string[]) {
+  let query = supabaseAdmin
+    .from("jobs")
+    .select("id, title, status, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, profiles!jobs_worker_id_fkey(full_name, avatar_url)")
+    .eq("client_id", userId)
+    .order("created_at", { ascending: false });
+
+  if (statusFilter && statusFilter.length > 0) {
+    query = query.in("status", statusFilter);
+  }
+
+  const { data, error } = await query;
+  if (error) throw appError(500, error.message, "JOBS_FETCH_FAILED");
+  return data ?? [];
+}
+
+export async function getJobById(userId: string, jobId: string) {
+  const { data: job, error } = await supabaseAdmin
+    .from("jobs")
+    .select("*, profiles!jobs_client_id_fkey(full_name, avatar_url, phone), profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "JOB_FETCH_FAILED");
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+
+  // Only participants can view a job
+  if (job.client_id !== userId && job.worker_id !== userId) {
+    throw appError(403, "Not authorized to view this job", "FORBIDDEN");
+  }
+
+  return job;
+}
