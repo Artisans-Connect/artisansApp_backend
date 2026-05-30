@@ -171,12 +171,26 @@ export async function getHistory(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, status, budget_fixed, budget_min, budget_max, updated_at, profiles!jobs_client_id_fkey(full_name, avatar_url)",
+      "id, title, status, budget_fixed, budget_min, budget_max, address_label, updated_at, categories(name), profiles!jobs_client_id_fkey(full_name, avatar_url)",
     )
     .eq("worker_id", userId)
     .in("status", [JOB_STATUS.COMPLETED, JOB_STATUS.CANCELLED])
     .order("updated_at", { ascending: false });
 
   if (error) throw appError(500, error.message, "HISTORY_FETCH_FAILED");
+  return data ?? [];
+}
+
+export async function getJobRequests(_userId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .select(
+      "id, title, description, status, budget_min, budget_max, address_label, location_lat, location_lng, created_at, categories(name), profiles!jobs_client_id_fkey(full_name)",
+    )
+    .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
+    .is("worker_id", null)
+    .order("created_at", { ascending: false });
+
+  if (error) throw appError(500, error.message, "JOBS_FETCH_FAILED");
   return data ?? [];
 }

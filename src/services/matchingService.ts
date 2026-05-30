@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "../config/supabase";
 import { JOB_STATUS, MATCHING } from "../constants/enums";
+import { appError } from "../utils/appError";
 import { haversineKm } from "../utils/haversine";
 import { logger } from "../utils/logger";
 import * as notifyService from "./notifyService";
@@ -40,7 +41,7 @@ export function clearDispatchState(jobId: string): void {
 
 async function fetchJob(jobId: string) {
   const { data, error } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
-  if (error) throw error;
+  if (error) throw appError(500, error.message, "JOB_FETCH_FAILED");
   return data;
 }
 
@@ -61,7 +62,7 @@ async function fetchCandidateWorkers(
     .eq("is_available", true)
     .eq("is_verified", true);
 
-  if (error) throw error;
+  if (error) throw appError(500, error.message, "WORKERS_FETCH_FAILED");
 
   return (data ?? []).filter((worker) => {
     if (excludeIds.has(worker.id)) return false;

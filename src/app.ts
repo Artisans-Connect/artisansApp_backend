@@ -44,9 +44,11 @@ app.get('/protected/health', authMiddleware, (req: Request, res: Response) => {
 });
 
 /* Graceful Error handling*/
-app.use((req: Request, res: Response, next: NextFunction) =>
-  next(createHttpError(404, `Can't find ${req.originalUrl} on this server`)),
-);
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const err = createHttpError(404, `Can't find ${req.originalUrl} on this server`);
+  (err as createHttpError.HttpError & { errorCode: string }).errorCode = "NOT_FOUND";
+  next(err);
+});
 app.use(globalErrorHandler);
 
 export default app;

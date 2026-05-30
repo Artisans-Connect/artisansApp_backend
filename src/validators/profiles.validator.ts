@@ -17,6 +17,7 @@ export const updateProfileSchema = z.object({
   full_name: z.string().trim().min(1).max(100).optional(),
   phone: z.string().trim().min(1).optional(),
   avatar_url: z.string().url().nullable().optional(),
+  bio: z.string().trim().max(500).optional(),
 });
 
 export const fcmTokenSchema = z.object({
