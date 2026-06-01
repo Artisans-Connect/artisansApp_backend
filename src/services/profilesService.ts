@@ -20,6 +20,8 @@ export async function createProfile(userId: string, body: unknown) {
     phone: input.phone,
     role: input.role,
     avatar_url: input.avatar_url ?? null,
+    bio: input.bio ?? null,
+    location_label: input.location_label ?? null,
   });
 
   if (profileError) {
@@ -36,6 +38,7 @@ export async function createProfile(userId: string, body: unknown) {
       hourly_rate: input.hourly_rate ?? null,
       rate_type: input.rate_type,
       service_areas: input.service_areas,
+      experience_band: input.experience_band ?? null,
     });
 
     if (workerError) {

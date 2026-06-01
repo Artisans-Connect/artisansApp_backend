@@ -14,6 +14,6 @@ router.use("/categories", categoriesRouter);
 router.use("/jobs", jobsRouter);
 router.use("/workers", workersRouter);
 router.use("/reviews", reviewsRouter);
-router.use("/conversations", chatRouter);
+router.use("/chat", chatRouter);
 
 export default router;

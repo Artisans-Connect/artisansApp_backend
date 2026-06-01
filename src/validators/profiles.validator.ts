@@ -10,6 +10,7 @@ export const createProfileSchema = z.object({
   rate_type: z.enum(["hourly", "fixed"]).default("hourly"),
   service_areas: z.array(z.string().trim().min(1)).default([]),
   bio: z.string().trim().max(500).optional(),
+  location_label: z.string().trim().optional(),
   experience_band: z.string().trim().optional(),
 });
 
@@ -18,6 +19,7 @@ export const updateProfileSchema = z.object({
   phone: z.string().trim().min(1).optional(),
   avatar_url: z.string().url().nullable().optional(),
   bio: z.string().trim().max(500).optional(),
+  location_label: z.string().trim().optional(),
 });
 
 export const fcmTokenSchema = z.object({
