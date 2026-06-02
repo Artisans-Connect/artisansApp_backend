@@ -10,10 +10,11 @@ export const updateAvailabilitySchema = z.object({
 });
 
 export const nearbyWorkersSchema = z.object({
-  category_id: z.uuid(),
-  lat: z.coerce.number().min(-90).max(90),
-  lng: z.coerce.number().min(-180).max(180),
+  category_id: z.string().uuid().optional(),
+  lat: z.coerce.number().min(-90).max(90).optional(),
+  lng: z.coerce.number().min(-180).max(180).optional(),
   radius_km: z.coerce.number().positive().max(100).default(15),
+  limit: z.coerce.number().positive().max(50).default(20),
 });
 
 export const updateWorkerProfileSchema = z.object({

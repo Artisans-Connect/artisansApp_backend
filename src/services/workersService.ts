@@ -54,33 +54,44 @@ export async function getNearby(query: unknown) {
     throw appError(400, parsed.error.issues[0]?.message ?? "Invalid nearby query", "VALIDATION_ERROR");
   }
 
-  const { category_id, lat, lng, radius_km } = parsed.data;
-  const { data: category } = await supabaseAdmin.from("categories").select("name, slug").eq("id", category_id).maybeSingle();
-  const categoryKey = (category?.slug ?? category?.name ?? "").toLowerCase();
+  const { category_id, lat, lng, radius_km, limit } = parsed.data;
+  let categoryKey = "";
+  if (category_id) {
+    const { data: category } = await supabaseAdmin.from("categories").select("name, slug").eq("id", category_id).maybeSingle();
+    categoryKey = (category?.slug ?? category?.name ?? "").toLowerCase();
+  }
 
   const { data: workers, error } = await supabaseAdmin
     .from("workers")
-    .select("id, current_lat, current_lng, rating, hourly_rate, is_available, is_verified, skills")
+    .select("id, current_lat, current_lng, rating, hourly_rate, is_available, is_verified, skills, profiles!workers_id_fkey(full_name, avatar_url)")
     .eq("is_available", true)
     .eq("is_verified", true);
 
   if (error) throw appError(500, error.message, "NEARBY_FETCH_FAILED");
 
-  const ranked = (workers ?? [])
-    .filter((w) => w.current_lat != null && w.current_lng != null)
+  let result: any[] = (workers ?? [])
     .filter((w) => {
+      if (!categoryKey) return true;
       const skills = (w.skills ?? []).map((s: string) => s.toLowerCase());
-      if (!categoryKey || skills.length === 0) return true;
+      if (skills.length === 0) return false;
       return skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s));
-    })
-    .map((w) => ({
-      ...w,
-      distance_km: haversineKm(lat, lng, w.current_lat!, w.current_lng!),
-    }))
-    .filter((w) => w.distance_km <= radius_km)
-    .sort((a, b) => a.distance_km - b.distance_km || (b.rating ?? 0) - (a.rating ?? 0));
+    });
 
-  return ranked;
+  if (lat !== undefined && lng !== undefined) {
+    result = result
+      .filter((w) => w.current_lat != null && w.current_lng != null)
+      .map((w) => ({
+        ...w,
+        distance_km: haversineKm(lat, lng, w.current_lat!, w.current_lng!),
+      }))
+      .filter((w) => w.distance_km <= radius_km)
+      .sort((a, b) => a.distance_km - b.distance_km || (b.rating ?? 0) - (a.rating ?? 0));
+  } else {
+    // If no location provided, just sort by rating (highest first)
+    result = result.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+  }
+
+  return result.slice(0, limit);
 }
 
 export async function acceptJob(userId: string, jobId: string) {
