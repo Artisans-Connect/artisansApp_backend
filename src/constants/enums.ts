@@ -19,5 +19,9 @@ export const MATCHING = {
   MAX_ROUNDS: 3,
   WORKERS_PER_ROUND: 3,
   ROUND_TIMEOUT_MS: 90_000,
-  DEFAULT_RADIUS_KM: 15,
+  /** Iterative search: start tight, expand when no candidates */
+  RADIUS_STEPS_KM: [5, 10, 15, 25] as const,
+  LOCATION_STALE_MS: 2 * 60 * 1000,
+  /** ASAP jobs: DB cron safety net via expires_at */
+  JOB_EXPIRES_MINUTES: 45,
 } as const;

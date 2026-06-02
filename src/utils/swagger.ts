@@ -12,9 +12,18 @@ export function setupSwagger(app: Application) {
     return;
   }
 
-  const swaggerDir = path.join(__dirname, '../docs'); // swagger directory
+  const swaggerDirs = [
+    path.join(__dirname, '../docs'),
+    path.join(process.cwd(), 'docs'),
+    path.join(process.cwd(), 'src/docs'),
+  ];
+
+  const swaggerDir = swaggerDirs.find((dir) => fs.existsSync(dir));
   let swaggerDocument: any = {};
-  try {
+
+  if (!swaggerDir) {
+    logger('Swagger directory not found; skipping spec loading.');
+  } else {
     const files = fs.readdirSync(swaggerDir).filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'));
     const inputs: any[] = [];
     for (const file of files) {
@@ -34,23 +43,26 @@ export function setupSwagger(app: Application) {
         swaggerDocument = mergeResult.output;
       }
     }
-
-    app.get('/api-docs.json', (_req: Request, res: Response) => {
-        res.setHeader('Content-Type', 'application/json');
-        res.json(swaggerDocument);
-    });
-
-    app.use('/swagger', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
-        swaggerUrl: '/api-docs.json',
-    }));
-
-    app.use(
-      '/scalar',
-      apiReference({
-        url: '/openapi.json',
-      })
-    );
-  } catch (err) {
-    logger('Failed to read swagger directory:', err);
   }
+
+  app.get('/api-docs.json', (_req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.json(swaggerDocument);
+  });
+
+  app.get('/openapi.json', (_req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.json(swaggerDocument);
+  });
+
+  app.use('/swagger', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
+    swaggerUrl: '/api-docs.json',
+  }));
+
+  app.use(
+    '/scalar',
+    apiReference({
+      url: '/api-docs.json',
+    })
+  );
 }

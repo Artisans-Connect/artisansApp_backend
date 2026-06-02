@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "../config/supabase";
 import { JOB_STATUS } from "../constants/enums";
 import { haversineKm } from "../utils/haversine";
+import { isLocationFresh } from "../utils/locationFreshness";
 import { appError } from "../utils/appError";
 import {
   nearbyWorkersSchema,
@@ -63,19 +64,21 @@ export async function getNearby(query: unknown) {
 
   const { data: workers, error } = await supabaseAdmin
     .from("workers")
-    .select("id, current_lat, current_lng, rating, hourly_rate, is_available, is_verified, skills, profiles!workers_id_fkey(full_name, avatar_url)")
+    .select(
+      "id, current_lat, current_lng, location_at, rating, hourly_rate, is_available, is_verified, skills, profiles!workers_id_fkey(full_name, avatar_url)",
+    )
     .eq("is_available", true)
     .eq("is_verified", true);
 
   if (error) throw appError(500, error.message, "NEARBY_FETCH_FAILED");
 
-  let result: any[] = (workers ?? [])
-    .filter((w) => {
-      if (!categoryKey) return true;
-      const skills = (w.skills ?? []).map((s: string) => s.toLowerCase());
-      if (skills.length === 0) return false;
-      return skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s));
-    });
+  let result: any[] = (workers ?? []).filter((w) => {
+    if (!isLocationFresh(w.location_at)) return false;
+    if (!categoryKey) return true;
+    const skills = (w.skills ?? []).map((s: string) => s.toLowerCase());
+    if (skills.length === 0) return false;
+    return skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s));
+  });
 
   if (lat !== undefined && lng !== undefined) {
     result = result
@@ -192,12 +195,23 @@ export async function getHistory(userId: string) {
   return data ?? [];
 }
 
-export async function getJobRequests(_userId: string) {
+export async function getJobRequests(userId: string) {
+  const { data: dispatches, error: dispatchError } = await supabaseAdmin
+    .from("job_dispatches")
+    .select("job_id")
+    .eq("worker_id", userId);
+
+  if (dispatchError) throw appError(500, dispatchError.message, "DISPATCH_FETCH_FAILED");
+
+  const jobIds = [...new Set((dispatches ?? []).map((d) => d.job_id))];
+  if (jobIds.length === 0) return [];
+
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
       "id, title, description, status, budget_min, budget_max, address_label, location_lat, location_lng, created_at, categories(name), profiles!jobs_client_id_fkey(full_name)",
     )
+    .in("id", jobIds)
     .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
     .is("worker_id", null)
     .order("created_at", { ascending: false });

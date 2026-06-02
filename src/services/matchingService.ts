@@ -2,6 +2,7 @@ import { supabaseAdmin } from "../config/supabase";
 import { JOB_STATUS, MATCHING } from "../constants/enums";
 import { appError } from "../utils/appError";
 import { haversineKm } from "../utils/haversine";
+import { isLocationFresh } from "../utils/locationFreshness";
 import { logger } from "../utils/logger";
 import * as notifyService from "./notifyService";
 
@@ -9,6 +10,7 @@ type WorkerRow = {
   id: string;
   current_lat: number | null;
   current_lng: number | null;
+  location_at: string | null;
   rating: number | null;
   skills: string[] | null;
   is_available: boolean;
@@ -17,6 +19,7 @@ type WorkerRow = {
 
 type DispatchState = {
   round: number;
+  radiusIndex: number;
   dispatchedWorkerIds: Set<string>;
   declinedWorkerIds: Set<string>;
   timeout?: NodeJS.Timeout;
@@ -27,7 +30,12 @@ const dispatchStateByJob = new Map<string, DispatchState>();
 function getState(jobId: string): DispatchState {
   let state = dispatchStateByJob.get(jobId);
   if (!state) {
-    state = { round: 1, dispatchedWorkerIds: new Set(), declinedWorkerIds: new Set() };
+    state = {
+      round: 1,
+      radiusIndex: 0,
+      dispatchedWorkerIds: new Set(),
+      declinedWorkerIds: new Set(),
+    };
     dispatchStateByJob.set(jobId, state);
   }
   return state;
@@ -53,12 +61,13 @@ async function fetchCategoryLabel(categoryId: string): Promise<string> {
 async function fetchCandidateWorkers(
   job: { location_lat: number; location_lng: number; category_id: string },
   excludeIds: Set<string>,
+  radiusKm: number,
 ): Promise<WorkerRow[]> {
   const categoryKey = await fetchCategoryLabel(job.category_id);
 
   const { data, error } = await supabaseAdmin
     .from("workers")
-    .select("id, current_lat, current_lng, rating, skills, is_available, is_verified")
+    .select("id, current_lat, current_lng, location_at, rating, skills, is_available, is_verified")
     .eq("is_available", true)
     .eq("is_verified", true);
 
@@ -67,12 +76,13 @@ async function fetchCandidateWorkers(
   return (data ?? []).filter((worker) => {
     if (excludeIds.has(worker.id)) return false;
     if (worker.current_lat == null || worker.current_lng == null) return false;
+    if (!isLocationFresh(worker.location_at)) return false;
     const skills = (worker.skills ?? []).map((s: string) => s.toLowerCase());
     if (categoryKey && skills.length > 0 && !skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s))) {
       return false;
     }
     const distance = haversineKm(job.location_lat, job.location_lng, worker.current_lat, worker.current_lng);
-    return distance <= MATCHING.DEFAULT_RADIUS_KM;
+    return distance <= radiusKm;
   }) as WorkerRow[];
 }
 
@@ -86,6 +96,26 @@ function rankWorkers(
     if (distA !== distB) return distA - distB;
     return (b.rating ?? 0) - (a.rating ?? 0);
   });
+}
+
+async function recordDispatches(
+  jobId: string,
+  workers: WorkerRow[],
+  round: number,
+  radiusKm: number,
+): Promise<void> {
+  if (workers.length === 0) return;
+  const rows = workers.map((w) => ({
+    job_id: jobId,
+    worker_id: w.id,
+    round,
+    radius_km: radiusKm,
+  }));
+  const { error } = await supabaseAdmin.from("job_dispatches").upsert(rows, {
+    onConflict: "job_id,worker_id,round",
+    ignoreDuplicates: true,
+  });
+  if (error) logger(`job_dispatches insert warning: ${error.message}`);
 }
 
 export async function expireJob(jobId: string): Promise<void> {
@@ -106,11 +136,24 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
   if (![JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status)) return;
 
   const state = getState(jobId);
+  if (state.round !== round) {
+    state.radiusIndex = 0;
+  }
   state.round = round;
 
   const exclude = new Set([...state.dispatchedWorkerIds, ...state.declinedWorkerIds]);
-  const candidates = rankWorkers(await fetchCandidateWorkers(job, exclude), job);
-  const batch = candidates.slice(0, MATCHING.WORKERS_PER_ROUND);
+
+  let batch: WorkerRow[] = [];
+  let radiusKm = MATCHING.RADIUS_STEPS_KM[state.radiusIndex] ?? MATCHING.RADIUS_STEPS_KM.at(-1)!;
+
+  while (batch.length === 0 && state.radiusIndex < MATCHING.RADIUS_STEPS_KM.length) {
+    radiusKm = MATCHING.RADIUS_STEPS_KM[state.radiusIndex]!;
+    const candidates = rankWorkers(await fetchCandidateWorkers(job, exclude, radiusKm), job);
+    batch = candidates.slice(0, MATCHING.WORKERS_PER_ROUND);
+    if (batch.length === 0) {
+      state.radiusIndex += 1;
+    }
+  }
 
   if (batch.length === 0) {
     if (round >= MATCHING.MAX_ROUNDS) {
@@ -122,6 +165,8 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
   }
 
   await supabaseAdmin.from("jobs").update({ status: JOB_STATUS.MATCHING }).eq("id", jobId);
+
+  await recordDispatches(jobId, batch, round, radiusKm);
 
   for (const worker of batch) {
     state.dispatchedWorkerIds.add(worker.id);

@@ -13,7 +13,7 @@ export const nearbyWorkersSchema = z.object({
   category_id: z.string().uuid().optional(),
   lat: z.coerce.number().min(-90).max(90).optional(),
   lng: z.coerce.number().min(-180).max(180).optional(),
-  radius_km: z.coerce.number().positive().max(100).default(15),
+  radius_km: z.coerce.number().positive().max(100).default(5),
   limit: z.coerce.number().positive().max(50).default(20),
 });
 

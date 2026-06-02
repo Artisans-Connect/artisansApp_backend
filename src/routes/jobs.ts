@@ -21,7 +21,8 @@ router.post(
   "/create",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
-    const job = await jobsService.createJob(req.user!.id, req.body);
+    const idempotencyKey = req.get("Idempotency-Key");
+    const job = await jobsService.createJob(req.user!.id, req.body, idempotencyKey);
     res.status(201).json({ success: true, data: job });
   }),
 );
