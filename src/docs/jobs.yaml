@@ -1,0 +1,217 @@
+openapi: 3.0.0
+info:
+  title: Artisans Jobs API
+  version: 1.0.0
+paths:
+  /api/jobs/mine:
+    get:
+      summary: Retrieve jobs created by or assigned to the current user
+      tags:
+        - Jobs
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+          description: Comma-separated list of job statuses to filter by (e.g. pending,accepted,completed,cancelled)
+          example: "pending,accepted"
+      responses:
+        200:
+          description: A list of jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+  /api/jobs/create:
+    post:
+      summary: Create a new job request
+      tags:
+        - Jobs
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema:
+            type: string
+          required: false
+          description: Unique key to prevent double submissions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - category_id
+                - title
+                - description
+                - location_lat
+                - location_lng
+                - address_label
+                - job_mode
+                - budget_type
+                - service_type
+              properties:
+                category_id:
+                  type: string
+                  example: "cat_123"
+                title:
+                  type: string
+                  maxLength: 80
+                  example: "Fix leaking kitchen pipe"
+                description:
+                  type: string
+                  example: "The pipe under the kitchen sink is leaking heavily and needs urgent repair."
+                photo_urls:
+                  type: array
+                  items:
+                    type: string
+                  example: ["https://example.com/photo1.jpg"]
+                location_lat:
+                  type: number
+                  example: 6.6731
+                location_lng:
+                  type: number
+                  example: -1.5654
+                address_label:
+                  type: string
+                  example: "KNUST campus, Kumasi"
+                job_mode:
+                  type: string
+                  enum: [ASAP, SCHEDULED]
+                  example: "ASAP"
+                budget_type:
+                  type: string
+                  enum: [FIXED, RANGE]
+                  example: "FIXED"
+                budget_fixed:
+                  type: number
+                  example: 150.00
+                budget_min:
+                  type: number
+                  example: 100.00
+                budget_max:
+                  type: number
+                  example: 200.00
+                scheduled_for:
+                  type: string
+                  format: date-time
+                  example: "2026-06-04T10:00:00Z"
+                service_type:
+                  type: string
+                  enum: [ON_SITE, REMOTE]
+                  example: "ON_SITE"
+      responses:
+        201:
+          description: Job created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+  /api/jobs/{id}:
+    get:
+      summary: Get details of a specific job
+      tags:
+        - Jobs
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: The Job ID
+          example: 45
+      responses:
+        200:
+          description: Job details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+  /api/jobs/{id}/cancel:
+    post:
+      summary: Cancel a job
+      tags:
+        - Jobs
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: The Job ID to cancel
+          example: 45
+      responses:
+        200:
+          description: Job cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+  /api/jobs/{id}/complete:
+    post:
+      summary: Complete a job
+      tags:
+        - Jobs
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: The Job ID to mark as completed
+          example: 45
+      responses:
+        200:
+          description: Job completed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

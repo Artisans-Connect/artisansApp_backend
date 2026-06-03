@@ -1,0 +1,32 @@
+openapi: 3.0.0
+info:
+  title: Artisans Categories API
+  version: 1.0.0
+paths:
+  /api/categories:
+    get:
+      summary: Retrieve all job/service categories
+      tags:
+        - Categories
+      responses:
+        200:
+          description: A list of categories
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          example: "cat_123"
+                        name:
+                          type: string
+                          example: "Plumber"

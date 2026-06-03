@@ -1,0 +1,314 @@
+openapi: 3.0.0
+info:
+  title: Artisans Workers API
+  version: 1.0.0
+paths:
+  /api/workers/location:
+    put:
+      summary: Update worker's current real-time coordinates
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - lat
+                - lng
+              properties:
+                lat:
+                  type: number
+                  example: 6.6731
+                lng:
+                  type: number
+                  example: -1.5654
+      responses:
+        200:
+          description: Location updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+  /api/workers/availability:
+    put:
+      summary: Toggle worker online/offline availability status
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - is_available
+              properties:
+                is_available:
+                  type: boolean
+                  example: true
+      responses:
+        200:
+          description: Availability status updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+  /api/workers/nearby:
+    get:
+      summary: Find workers near a specific location
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: lat
+          required: true
+          schema:
+            type: number
+          description: Latitude of target location
+          example: 6.6731
+        - in: query
+          name: lng
+          required: true
+          schema:
+            type: number
+          description: Longitude of target location
+          example: -1.5654
+        - in: query
+          name: radius_km
+          schema:
+            type: number
+            default: 10
+          description: Maximum search radius in kilometers
+          example: 5
+        - in: query
+          name: category_id
+          schema:
+            type: string
+          description: Optionally filter by specific service category ID
+          example: "cat_123"
+      responses:
+        200:
+          description: Nearby workers list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+  /api/workers/accept/{jobId}:
+    post:
+      summary: Accept an assigned job request
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: integer
+          description: The Job ID
+          example: 45
+      responses:
+        200:
+          description: Job accepted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+  /api/workers/decline/{jobId}:
+    post:
+      summary: Decline an assigned job request
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: integer
+          description: The Job ID
+          example: 45
+      responses:
+        200:
+          description: Job request declined
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+  /api/workers/me/profile:
+    put:
+      summary: Update worker-specific details (categories, description, rates)
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bio:
+                  type: string
+                  example: "Experienced residential plumber with 5+ years experience."
+                skills:
+                  type: array
+                  items:
+                    type: string
+                  example: ["piping", "leak detection", "water heater repair"]
+                base_rate:
+                  type: number
+                  example: 50.00
+      responses:
+        200:
+          description: Worker profile updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+  /api/workers/me/active-job:
+    get:
+      summary: Fetch the worker's current active job
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Active job details or null if none
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    nullable: true
+  /api/workers/me/job-requests:
+    get:
+      summary: Get list of active job requests dispatched to this worker
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: List of pending job applications/invitations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+  /api/workers/me/history:
+    get:
+      summary: Get the worker's history of completed or cancelled jobs
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Worker's past jobs list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+  /api/workers/{jobId}/start:
+    post:
+      summary: Mark an accepted job as started/in-progress
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: integer
+          description: The Job ID
+          example: 45
+      responses:
+        200:
+          description: Job status updated to in_progress
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

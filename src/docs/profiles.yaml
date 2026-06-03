@@ -1,0 +1,153 @@
+openapi: 3.0.0
+info:
+  title: Artisans Profiles API
+  version: 1.0.0
+paths:
+  /api/profiles:
+    post:
+      summary: Create a user profile
+      tags:
+        - Profiles
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - full_name
+                - phone
+              properties:
+                full_name:
+                  type: string
+                  example: "John Doe"
+                phone:
+                  type: string
+                  example: "+233240000000"
+                avatar_url:
+                  type: string
+                  example: "https://example.com/avatar.jpg"
+      responses:
+        201:
+          description: Profile created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      full_name:
+                        type: string
+                      phone:
+                        type: string
+                      avatar_url:
+                        type: string
+  /api/profiles/me:
+    get:
+      summary: Get current user's profile
+      tags:
+        - Profiles
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Profile details retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      full_name:
+                        type: string
+                      phone:
+                        type: string
+                      avatar_url:
+                        type: string
+    put:
+      summary: Update current user's profile
+      tags:
+        - Profiles
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name:
+                  type: string
+                  example: "John Doe Updated"
+                avatar_url:
+                  type: string
+                  example: "https://example.com/new-avatar.jpg"
+      responses:
+        200:
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+  /api/profiles/me/fcm-token:
+    put:
+      summary: Update worker or client FCM token for push notifications
+      tags:
+        - Profiles
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fcm_token
+              properties:
+                fcm_token:
+                  type: string
+                  example: "dG9rZW5fZXhhbXBsZQ=="
+      responses:
+        200:
+          description: FCM token updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "FCM token updated"
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
