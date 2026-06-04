@@ -20,13 +20,52 @@ async function assertJobParticipant(userId: string, jobId: string) {
 export async function listConversations(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .select("id, title, status, client_id, worker_id, updated_at")
+    .select(
+      "id, title, status, client_id, worker_id, updated_at, client:profiles!jobs_client_id_fkey(full_name, avatar_url), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url)",
+    )
     .or(`client_id.eq.${userId},worker_id.eq.${userId}`)
     .not("worker_id", "is", null)
     .order("updated_at", { ascending: false });
 
   if (error) throw appError(500, error.message, "CONVERSATIONS_FETCH_FAILED");
-  return data ?? [];
+
+  const jobs = data ?? [];
+  if (jobs.length === 0) return [];
+
+  const jobIds = jobs.map((j) => j.id);
+  const { data: latestMessages } = await supabaseAdmin
+    .from("messages")
+    .select("job_id, content, created_at")
+    .in("job_id", jobIds)
+    .order("created_at", { ascending: false });
+
+  const lastByJob = new Map<string, { content: string; created_at: string }>();
+  for (const msg of latestMessages ?? []) {
+    if (!lastByJob.has(msg.job_id)) {
+      lastByJob.set(msg.job_id, { content: msg.content, created_at: msg.created_at });
+    }
+  }
+
+  return jobs.map((job) => {
+    const isClient = job.client_id === userId;
+    const counterpart = isClient ? job.worker : job.client;
+    const counterpartProfile = counterpart as { full_name?: string; avatar_url?: string } | null;
+    const last = lastByJob.get(job.id);
+
+    return {
+      id: job.id,
+      title: job.title,
+      status: job.status,
+      client_id: job.client_id,
+      worker_id: job.worker_id,
+      updated_at: job.updated_at,
+      counterpart_id: isClient ? job.worker_id : job.client_id,
+      counterpart_name: counterpartProfile?.full_name ?? "User",
+      counterpart_avatar_url: counterpartProfile?.avatar_url ?? null,
+      last_message_preview: last?.content ?? job.title,
+      last_message_at: last?.created_at ?? job.updated_at,
+    };
+  });
 }
 
 export async function getMessages(userId: string, jobId: string) {

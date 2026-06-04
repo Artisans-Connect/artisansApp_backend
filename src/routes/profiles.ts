@@ -32,6 +32,24 @@ router.put(
   }),
 );
 
+router.patch(
+  "/me/mode",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const profile = await profilesService.updateActiveMode(req.user!.id, req.body);
+    res.status(200).json({ success: true, data: profile });
+  }),
+);
+
+router.post(
+  "/me/worker",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const profile = await profilesService.onboardWorker(req.user!.id, req.body);
+    res.status(201).json({ success: true, data: profile });
+  }),
+);
+
 router.put(
   "/me/fcm-token",
   authMiddleware,

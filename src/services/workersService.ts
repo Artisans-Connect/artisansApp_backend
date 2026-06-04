@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../config/supabase";
+import { env } from "../config/env";
 import { JOB_STATUS } from "../constants/enums";
 import { haversineKm } from "../utils/haversine";
 import { isLocationFresh } from "../utils/locationFreshness";
@@ -56,31 +57,49 @@ export async function getNearby(query: unknown) {
   }
 
   const { category_id, lat, lng, radius_km, limit } = parsed.data;
+  const hasProximity = lat !== undefined && lng !== undefined;
+
   let categoryKey = "";
   if (category_id) {
     const { data: category } = await supabaseAdmin.from("categories").select("name, slug").eq("id", category_id).maybeSingle();
     categoryKey = (category?.slug ?? category?.name ?? "").toLowerCase();
   }
 
-  const { data: workers, error } = await supabaseAdmin
+  let workersQuery = supabaseAdmin
     .from("workers")
     .select(
-      "id, current_lat, current_lng, location_at, rating, hourly_rate, is_available, is_verified, skills, profiles!workers_id_fkey(full_name, avatar_url)",
-    )
-    .eq("is_available", true)
-    .eq("is_verified", true);
+      "id, current_lat, current_lng, location_at, rating, hourly_rate, is_available, is_verified, skills, service_areas, profiles!workers_id_fkey(full_name, avatar_url)",
+    );
+
+  if (hasProximity) {
+    workersQuery = workersQuery.eq("is_available", true).eq("is_verified", true);
+  } else if (env.NODE_ENV !== "development") {
+    workersQuery = workersQuery.eq("is_verified", true);
+  }
+
+  const { data: workers, error } = await workersQuery;
 
   if (error) throw appError(500, error.message, "NEARBY_FETCH_FAILED");
 
-  let result: any[] = (workers ?? []).filter((w) => {
-    if (!isLocationFresh(w.location_at)) return false;
-    if (!categoryKey) return true;
-    const skills = (w.skills ?? []).map((s: string) => s.toLowerCase());
-    if (skills.length === 0) return false;
-    return skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s));
-  });
+  let result: any[] = workers ?? [];
 
-  if (lat !== undefined && lng !== undefined) {
+  if (hasProximity) {
+    result = result.filter((w) => {
+      if (!isLocationFresh(w.location_at)) return false;
+      if (!categoryKey) return true;
+      const skills = (w.skills ?? []).map((s: string) => s.toLowerCase());
+      if (skills.length === 0) return false;
+      return skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s));
+    });
+  } else if (categoryKey) {
+    result = result.filter((w) => {
+      const skills = (w.skills ?? []).map((s: string) => s.toLowerCase());
+      if (skills.length === 0) return false;
+      return skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s));
+    });
+  }
+
+  if (hasProximity) {
     result = result
       .filter((w) => w.current_lat != null && w.current_lng != null)
       .map((w) => ({
