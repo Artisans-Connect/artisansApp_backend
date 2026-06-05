@@ -27,6 +27,15 @@ router.post(
   }),
 );
 
+router.get(
+  "/:id/matching-progress",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const progress = await jobsService.getMatchingProgress(req.user!.id, paramId(req.params.id));
+    res.status(200).json({ success: true, data: progress });
+  }),
+);
+
 router.post(
   "/:id/cancel",
   authMiddleware,

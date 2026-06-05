@@ -21,6 +21,7 @@ export const createJobSchema = z
     budget_max: z.number().positive().optional(),
     scheduled_for: z.string().datetime().optional(),
     service_type: serviceType,
+    requested_worker_id: z.string().uuid().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.budget_type === "fixed" && data.budget_fixed == null) {

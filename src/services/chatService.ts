@@ -82,19 +82,23 @@ export async function listConversations(userId: string) {
   if (error) throw appError(500, error.message, "CONVERSATIONS_FETCH_FAILED");
 
   const jobs = data ?? [];
-  if (jobs.length === 0) return [];
 
   const jobIds = jobs.map((j) => j.id);
-  const { data: latestMessages } = await supabaseAdmin
-    .from("messages")
-    .select("job_id, content, created_at")
-    .in("job_id", jobIds)
-    .order("created_at", { ascending: false });
+  const { data: latestMessages } = jobIds.length === 0
+    ? { data: [] }
+    : await supabaseAdmin
+        .from("messages")
+        .select("job_id, content, image_urls, media_urls, created_at")
+        .in("job_id", jobIds)
+        .order("created_at", { ascending: false });
 
   const lastByJob = new Map<string, { content: string; created_at: string }>();
   for (const msg of latestMessages ?? []) {
     if (!lastByJob.has(msg.job_id)) {
-      lastByJob.set(msg.job_id, { content: msg.content, created_at: msg.created_at });
+      lastByJob.set(msg.job_id, {
+        content: previewContent(msg),
+        created_at: msg.created_at,
+      });
     }
   }
 
@@ -135,7 +139,7 @@ export async function listConversations(userId: string) {
     ? { data: [] }
     : await supabaseAdmin
         .from("messages")
-        .select("conversation_id, content, created_at")
+        .select("conversation_id, content, image_urls, media_urls, created_at")
         .in("conversation_id", directIds)
         .order("created_at", { ascending: false });
 
@@ -143,7 +147,7 @@ export async function listConversations(userId: string) {
   for (const msg of latestDirectMessages ?? []) {
     if (msg.conversation_id && !lastByConversation.has(msg.conversation_id)) {
       lastByConversation.set(msg.conversation_id, {
-        content: msg.content,
+        content: previewContent(msg),
         created_at: msg.created_at,
       });
     }
@@ -175,12 +179,20 @@ export async function listConversations(userId: string) {
   );
 }
 
+function previewContent(msg: { content?: string | null; image_urls?: string[] | null; media_urls?: string[] | null }) {
+  if (msg.content?.trim()) return msg.content;
+  if ((msg.media_urls?.length ?? 0) > 0 || (msg.image_urls?.length ?? 0) > 0) {
+    return "Media";
+  }
+  return "";
+}
+
 export async function getMessages(userId: string, conversationId: string) {
   const conversation = await assertConversationParticipant(userId, conversationId);
 
   let query = supabaseAdmin
     .from("messages")
-    .select("id, job_id, conversation_id, sender_id, content, image_urls, is_read, created_at");
+    .select("id, job_id, conversation_id, sender_id, content, image_urls, media_urls, media_types, client_message_id, is_read, created_at");
   query = conversation.type === "direct"
     ? query.eq("conversation_id", conversationId)
     : query.eq("job_id", conversationId);
@@ -198,6 +210,20 @@ export async function sendMessage(userId: string, conversationId: string, body: 
   }
 
   const conversation = await assertConversationParticipant(userId, conversationId);
+  if (parsed.data.client_message_id) {
+    let existingQuery = supabaseAdmin
+      .from("messages")
+      .select("id, job_id, conversation_id, sender_id, content, image_urls, media_urls, media_types, client_message_id, is_read, created_at")
+      .eq("sender_id", userId)
+      .eq("client_message_id", parsed.data.client_message_id);
+    existingQuery = conversation.type === "direct"
+      ? existingQuery.eq("conversation_id", conversationId)
+      : existingQuery.eq("job_id", conversationId);
+
+    const { data: existing, error: existingError } = await existingQuery.maybeSingle();
+    if (existingError) throw appError(500, existingError.message, "MESSAGE_FETCH_FAILED");
+    if (existing) return existing;
+  }
 
   const { data, error } = await supabaseAdmin
     .from("messages")
@@ -207,6 +233,9 @@ export async function sendMessage(userId: string, conversationId: string, body: 
       sender_id: userId,
       content: parsed.data.content,
       image_urls: parsed.data.image_urls,
+      media_urls: parsed.data.media_urls,
+      media_types: parsed.data.media_types,
+      client_message_id: parsed.data.client_message_id ?? null,
     })
     .select()
     .single();

@@ -38,7 +38,7 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
   }
 
   const input = parsed.data;
-  const status = initialJobStatus(input.job_mode);
+  const status = input.requested_worker_id ? JOB_STATUS.MATCHING : initialJobStatus(input.job_mode);
 
   const expiresAt =
     input.job_mode === JOB_MODE.ASAP
@@ -65,6 +65,7 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
       scheduled_for: input.scheduled_for ?? null,
       service_type: input.service_type,
       expires_at: expiresAt,
+      requested_worker_id: input.requested_worker_id ?? null,
     })
     .select()
     .single();
@@ -84,7 +85,14 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
     }
   }
 
-  if (input.job_mode === JOB_MODE.ASAP) {
+  if (input.requested_worker_id) {
+    await matchingService.dispatchToWorker(data.id, input.requested_worker_id);
+    await notifyService.notifyWorkerNewJob(input.requested_worker_id, {
+      id: data.id,
+      title: data.title,
+      address_label: data.address_label,
+    });
+  } else if (input.job_mode === JOB_MODE.ASAP) {
     void matchingService.findAndDispatch(data.id, 1);
   }
 
@@ -139,7 +147,7 @@ export async function completeJob(userId: string, jobId: string) {
 export async function getMyJobs(userId: string, statusFilter?: string[]) {
   let query = supabaseAdmin
     .from("jobs")
-    .select("id, title, status, worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
+    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone)")
     .eq("client_id", userId)
     .order("created_at", { ascending: false });
 
@@ -150,6 +158,45 @@ export async function getMyJobs(userId: string, statusFilter?: string[]) {
   const { data, error } = await query;
   if (error) throw appError(500, error.message, "JOBS_FETCH_FAILED");
   return data ?? [];
+}
+
+export async function getMatchingProgress(userId: string, jobId: string) {
+  const { data: job, error: jobError } = await supabaseAdmin
+    .from("jobs")
+    .select("id, client_id, worker_id, requested_worker_id, status")
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (jobError) throw appError(500, jobError.message, "JOB_FETCH_FAILED");
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+  if (job.client_id !== userId && job.worker_id !== userId && job.requested_worker_id !== userId) {
+    throw appError(403, "Not authorized to view this job", "FORBIDDEN");
+  }
+
+  const { data: dispatches, error } = await supabaseAdmin
+    .from("job_dispatches")
+    .select("round, radius_km, worker_id, created_at")
+    .eq("job_id", jobId)
+    .order("round", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (error) throw appError(500, error.message, "MATCHING_PROGRESS_FAILED");
+
+  const rows = dispatches ?? [];
+  const currentRound = rows[0]?.round ?? 1;
+  const activeRadiusKm = rows[0]?.radius_km ?? MATCHING.RADIUS_STEPS_KM[0];
+  const dispatchedCount = rows.filter((row) => row.round === currentRound).length;
+
+  return {
+    job_id: jobId,
+    status: job.status,
+    current_round: currentRound,
+    max_rounds: MATCHING.MAX_ROUNDS,
+    active_radius_km: Number(activeRadiusKm ?? 0),
+    dispatched_count: dispatchedCount,
+    radius_steps_km: MATCHING.RADIUS_STEPS_KM,
+    is_targeted: Boolean(job.requested_worker_id),
+  };
 }
 
 export async function getJobById(userId: string, jobId: string) {

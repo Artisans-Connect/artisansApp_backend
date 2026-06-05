@@ -147,6 +147,27 @@ async function recordDispatches(
   if (error) logger(`job_dispatches insert warning: ${error.message}`);
 }
 
+export async function dispatchToWorker(
+  jobId: string,
+  workerId: string,
+  round = 1,
+  radiusKm = 0,
+): Promise<void> {
+  const { error } = await supabaseAdmin.from("job_dispatches").upsert(
+    {
+      job_id: jobId,
+      worker_id: workerId,
+      round,
+      radius_km: radiusKm,
+    },
+    {
+      onConflict: "job_id,worker_id,round",
+      ignoreDuplicates: true,
+    },
+  );
+  if (error) logger(`targeted job_dispatch insert warning: ${error.message}`);
+}
+
 export async function expireJob(jobId: string): Promise<void> {
   const job = await fetchJob(jobId);
   if (!job) return;
