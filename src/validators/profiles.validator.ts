@@ -26,6 +26,12 @@ export const fcmTokenSchema = z.object({
   fcm_token: z.string().trim().min(1),
 });
 
+export const notificationDeviceSchema = z.object({
+  fcm_token: z.string().trim().min(1),
+  platform: z.string().trim().min(1).max(40).default("unknown"),
+  app_version: z.string().trim().max(40).optional(),
+});
+
 export const updateModeSchema = z.object({
   mode: z.enum(["client", "worker"]),
 });

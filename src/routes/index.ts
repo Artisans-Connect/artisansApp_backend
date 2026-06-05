@@ -7,6 +7,7 @@ import reviewsRouter from "./reviews";
 import chatRouter from "./chat";
 import pricingRouter from "./pricing";
 import verificationRouter from "./verification";
+import notificationsRouter from "./notifications";
 
 const router = Router();
 
@@ -19,5 +20,6 @@ router.use("/reviews", reviewsRouter);
 router.use("/chat", chatRouter);
 router.use("/pricing", pricingRouter);
 router.use("/verification", verificationRouter);
+router.use("/notifications", notificationsRouter);
 
 export default router;

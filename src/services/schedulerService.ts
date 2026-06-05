@@ -5,6 +5,7 @@ import * as matchingService from "./matchingService";
 export function startScheduler(): void {
   cron.schedule("* * * * *", () => {
     void matchingService.expireStaleJobs().catch((err) => logger("Expire cron failed:", err));
+    void matchingService.recoverTimedOutMatchingJobs().catch((err) => logger("Matching recovery cron failed:", err));
   });
 
   cron.schedule("0 * * * *", () => {

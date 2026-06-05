@@ -1,12 +1,18 @@
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
+import { createHash } from "crypto";
 import {
   createProfileSchema,
   updateProfileSchema,
   fcmTokenSchema,
+  notificationDeviceSchema,
   updateModeSchema,
   onboardWorkerSchema,
 } from "../validators/profiles.validator";
+
+export function hashFcmToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
 
 export async function createProfile(userId: string, body: unknown) {
   const parsed = createProfileSchema.safeParse(body);
@@ -199,4 +205,52 @@ export async function updateFcmToken(userId: string, body: unknown) {
 
   if (error) throw appError(500, error.message, "FCM_TOKEN_UPDATE_FAILED");
   return { success: true };
+}
+
+export async function registerNotificationDevice(userId: string, body: unknown) {
+  const parsed = notificationDeviceSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid notification device", "VALIDATION_ERROR");
+  }
+
+  const input = parsed.data;
+  const tokenHash = hashFcmToken(input.fcm_token);
+
+  const { data, error } = await supabaseAdmin
+    .from("notification_devices")
+    .upsert(
+      {
+        user_id: userId,
+        token_hash: tokenHash,
+        fcm_token: input.fcm_token,
+        platform: input.platform,
+        app_version: input.app_version ?? null,
+        last_seen_at: new Date().toISOString(),
+        revoked_at: null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "token_hash" },
+    )
+    .select("id, token_hash, platform, app_version, last_seen_at")
+    .single();
+
+  if (error) throw appError(500, error.message, "NOTIFICATION_DEVICE_REGISTER_FAILED");
+
+  await supabaseAdmin.from("profiles").update({ fcm_token: input.fcm_token }).eq("id", userId);
+
+  return data;
+}
+
+export async function revokeNotificationDevice(userId: string, tokenHash: string) {
+  const { data, error } = await supabaseAdmin
+    .from("notification_devices")
+    .update({ revoked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("token_hash", tokenHash)
+    .is("revoked_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "NOTIFICATION_DEVICE_REVOKE_FAILED");
+  return { success: true, revoked: Boolean(data) };
 }

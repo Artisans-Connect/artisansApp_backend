@@ -113,6 +113,16 @@ export async function getNearby(query: unknown) {
 }
 
 export async function acceptJob(userId: string, jobId: string) {
+  const { data: dispatch } = await supabaseAdmin
+    .from("job_dispatches")
+    .select("job_id")
+    .eq("job_id", jobId)
+    .eq("worker_id", userId)
+    .in("status", ["sent", "seen"])
+    .maybeSingle();
+
+  if (!dispatch) throw appError(403, "This job was not dispatched to you", "FORBIDDEN");
+
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .update({ status: JOB_STATUS.MATCHED, worker_id: userId })
@@ -126,6 +136,8 @@ export async function acceptJob(userId: string, jobId: string) {
   if (!data) throw appError(409, "Job already taken or not available", "JOB_ALREADY_TAKEN");
 
   matchingService.clearDispatchState(jobId);
+  await matchingService.markDispatchAccepted(jobId, userId);
+  await matchingService.markDispatchesExpired(jobId, userId);
 
   const { data: workerProfile } = await supabaseAdmin.from("profiles").select("full_name").eq("id", userId).maybeSingle();
   await notifyService.notifyJobMatched(data.client_id, workerProfile?.full_name ?? "Artisan");
@@ -134,6 +146,16 @@ export async function acceptJob(userId: string, jobId: string) {
 }
 
 export async function declineJob(userId: string, jobId: string) {
+  const { data: dispatch } = await supabaseAdmin
+    .from("job_dispatches")
+    .select("job_id")
+    .eq("job_id", jobId)
+    .eq("worker_id", userId)
+    .in("status", ["sent", "seen"])
+    .maybeSingle();
+
+  if (!dispatch) throw appError(403, "This job was not dispatched to you", "FORBIDDEN");
+
   const { data: job } = await supabaseAdmin.from("jobs").select("id, status").eq("id", jobId).maybeSingle();
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
   if (![JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status)) {
@@ -211,10 +233,13 @@ export async function getHistory(userId: string) {
 }
 
 export async function getJobRequests(userId: string) {
+  await matchingService.expireTimedOutDispatches();
+
   const { data: dispatches, error: dispatchError } = await supabaseAdmin
     .from("job_dispatches")
     .select("job_id")
-    .eq("worker_id", userId);
+    .eq("worker_id", userId)
+    .in("status", ["sent", "seen"]);
 
   if (dispatchError) throw appError(500, dispatchError.message, "DISPATCH_FETCH_FAILED");
 
@@ -233,6 +258,44 @@ export async function getJobRequests(userId: string) {
 
   if (error) throw appError(500, error.message, "JOBS_FETCH_FAILED");
   return data ?? [];
+}
+
+export async function getJobRequestById(userId: string, jobId: string) {
+  await matchingService.expireTimedOutDispatches(jobId);
+
+  const { data: dispatch } = await supabaseAdmin
+    .from("job_dispatches")
+    .update({ status: "seen" })
+    .eq("job_id", jobId)
+    .eq("worker_id", userId)
+    .eq("status", "sent")
+    .select("job_id")
+    .maybeSingle();
+
+  if (!dispatch) {
+    const { data: existingDispatch } = await supabaseAdmin
+      .from("job_dispatches")
+      .select("job_id")
+      .eq("job_id", jobId)
+      .eq("worker_id", userId)
+      .in("status", ["seen", "sent"])
+      .maybeSingle();
+    if (!existingDispatch) throw appError(404, "Job request not found", "JOB_REQUEST_NOT_FOUND");
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .select(
+      "id, title, description, status, budget_min, budget_max, budget_fixed, budget_type, address_label, location_lat, location_lng, created_at, photo_urls, categories(name), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone)",
+    )
+    .eq("id", jobId)
+    .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
+    .is("worker_id", null)
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "JOB_FETCH_FAILED");
+  if (!data) throw appError(409, "Job is no longer available", "JOB_NOT_AVAILABLE");
+  return data;
 }
 
 function scoreNearbyWorker(worker: any, radiusKm: number): number {

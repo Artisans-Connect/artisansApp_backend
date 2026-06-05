@@ -79,6 +79,15 @@ router.get(
 );
 
 router.get(
+  "/me/job-requests/:jobId",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await workersService.getJobRequestById(req.user!.id, paramId(req.params.jobId));
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.get(
   "/me/history",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {

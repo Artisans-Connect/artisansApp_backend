@@ -8,9 +8,33 @@ type PushPayload = {
   data?: Record<string, string>;
 };
 
-async function getProfileFcmToken(userId: string): Promise<string | null> {
-  const { data } = await supabaseAdmin.from("profiles").select("fcm_token").eq("id", userId).maybeSingle();
-  return data?.fcm_token ?? null;
+async function getUserFcmTokens(userId: string): Promise<string[]> {
+  const { data: devices } = await supabaseAdmin
+    .from("notification_devices")
+    .select("fcm_token")
+    .eq("user_id", userId)
+    .is("revoked_at", null);
+
+  const tokens = new Set<string>();
+  for (const device of devices ?? []) {
+    if (device.fcm_token) tokens.add(device.fcm_token);
+  }
+
+  const { data: profile } = await supabaseAdmin.from("profiles").select("fcm_token").eq("id", userId).maybeSingle();
+  if (profile?.fcm_token) tokens.add(profile.fcm_token);
+
+  return [...tokens];
+}
+
+async function storeNotification(userId: string, payload: PushPayload): Promise<void> {
+  const { error } = await supabaseAdmin.from("notifications").insert({
+    user_id: userId,
+    type: payload.data?.type ?? "general",
+    title: payload.title,
+    body: payload.body,
+    data: payload.data ?? {},
+  });
+  if (error) logger(`Notification store failed: ${error.message}`);
 }
 
 export async function sendToToken(token: string, payload: PushPayload): Promise<void> {
@@ -27,15 +51,20 @@ export async function sendToToken(token: string, payload: PushPayload): Promise<
 }
 
 async function sendToUser(userId: string, payload: PushPayload): Promise<void> {
-  const token = await getProfileFcmToken(userId);
-  if (!token) {
-    logger(`No FCM token for user ${userId}`);
+  await storeNotification(userId, payload);
+
+  const tokens = await getUserFcmTokens(userId);
+  if (tokens.length === 0) {
+    logger(`No FCM tokens for user ${userId}`);
     return;
   }
-  try {
-    await sendToToken(token, payload);
-  } catch {
-    // Do not crash caller paths on push failure.
+
+  for (const token of tokens) {
+    try {
+      await sendToToken(token, payload);
+    } catch {
+      // Do not crash caller paths on push failure.
+    }
   }
 }
 

@@ -60,6 +60,25 @@ router.put(
   }),
 );
 
+router.post(
+  "/me/notification-devices",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const device = await profilesService.registerNotificationDevice(req.user!.id, req.body);
+    res.status(200).json({ success: true, data: device });
+  }),
+);
+
+router.delete(
+  "/me/notification-devices/:tokenHash",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const tokenHash = Array.isArray(req.params.tokenHash) ? req.params.tokenHash[0] : req.params.tokenHash;
+    const result = await profilesService.revokeNotificationDevice(req.user!.id, tokenHash);
+    res.status(200).json(result);
+  }),
+);
+
 router.get(
   "/:id",
   authMiddleware,

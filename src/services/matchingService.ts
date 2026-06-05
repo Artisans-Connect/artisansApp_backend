@@ -22,8 +22,6 @@ type WorkerRow = {
 type DispatchState = {
   round: number;
   radiusIndex: number;
-  dispatchedWorkerIds: Set<string>;
-  declinedWorkerIds: Set<string>;
   timeout?: NodeJS.Timeout;
 };
 
@@ -35,8 +33,6 @@ function getState(jobId: string): DispatchState {
     state = {
       round: 1,
       radiusIndex: 0,
-      dispatchedWorkerIds: new Set(),
-      declinedWorkerIds: new Set(),
     };
     dispatchStateByJob.set(jobId, state);
   }
@@ -134,11 +130,16 @@ async function recordDispatches(
   radiusKm: number,
 ): Promise<void> {
   if (workers.length === 0) return;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + MATCHING.ROUND_TIMEOUT_MS).toISOString();
   const rows = workers.map((w) => ({
     job_id: jobId,
     worker_id: w.id,
     round,
     radius_km: radiusKm,
+    status: "sent",
+    expires_at: expiresAt,
+    notified_at: now.toISOString(),
   }));
   const { error } = await supabaseAdmin.from("job_dispatches").upsert(rows, {
     onConflict: "job_id,worker_id,round",
@@ -153,12 +154,16 @@ export async function dispatchToWorker(
   round = 1,
   radiusKm = 0,
 ): Promise<void> {
+  const now = new Date();
   const { error } = await supabaseAdmin.from("job_dispatches").upsert(
     {
       job_id: jobId,
       worker_id: workerId,
       round,
       radius_km: radiusKm,
+      status: "sent",
+      expires_at: new Date(now.getTime() + MATCHING.ROUND_TIMEOUT_MS).toISOString(),
+      notified_at: now.toISOString(),
     },
     {
       onConflict: "job_id,worker_id,round",
@@ -166,6 +171,40 @@ export async function dispatchToWorker(
     },
   );
   if (error) logger(`targeted job_dispatch insert warning: ${error.message}`);
+}
+
+async function getDispatchedWorkerIds(jobId: string): Promise<Set<string>> {
+  const { data, error } = await supabaseAdmin.from("job_dispatches").select("worker_id").eq("job_id", jobId);
+  if (error) {
+    logger(`job_dispatches exclude warning: ${error.message}`);
+    return new Set();
+  }
+  return new Set((data ?? []).map((row) => row.worker_id as string));
+}
+
+export async function markDispatchesExpired(jobId: string, exceptWorkerId?: string): Promise<void> {
+  let query = supabaseAdmin
+    .from("job_dispatches")
+    .update({ status: "expired", responded_at: new Date().toISOString() })
+    .eq("job_id", jobId)
+    .in("status", ["sent", "seen"]);
+
+  if (exceptWorkerId) {
+    query = query.neq("worker_id", exceptWorkerId);
+  }
+
+  const { error } = await query;
+  if (error) logger(`dispatch expiry warning: ${error.message}`);
+}
+
+export async function markDispatchAccepted(jobId: string, workerId: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("job_dispatches")
+    .update({ status: "accepted", responded_at: new Date().toISOString() })
+    .eq("job_id", jobId)
+    .eq("worker_id", workerId)
+    .in("status", ["sent", "seen"]);
+  if (error) logger(`dispatch accept warning: ${error.message}`);
 }
 
 export async function expireJob(jobId: string): Promise<void> {
@@ -176,6 +215,7 @@ export async function expireJob(jobId: string): Promise<void> {
   }
 
   await supabaseAdmin.from("jobs").update({ status: JOB_STATUS.EXPIRED }).eq("id", jobId);
+  await markDispatchesExpired(jobId);
   clearDispatchState(jobId);
   await notifyService.notifyJobExpired(job.client_id);
 }
@@ -191,7 +231,8 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
   }
   state.round = round;
 
-  const exclude = new Set([...state.dispatchedWorkerIds, ...state.declinedWorkerIds]);
+  await expireTimedOutDispatches(jobId);
+  const exclude = await getDispatchedWorkerIds(jobId);
 
   let batch: WorkerRow[] = [];
   let radiusKm = MATCHING.RADIUS_STEPS_KM[state.radiusIndex] ?? MATCHING.RADIUS_STEPS_KM.at(-1)!;
@@ -219,7 +260,6 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
   await recordDispatches(jobId, batch, round, radiusKm);
 
   for (const worker of batch) {
-    state.dispatchedWorkerIds.add(worker.id);
     await notifyService.notifyWorkerNewJob(worker.id, {
       id: job.id,
       title: job.title,
@@ -247,6 +287,8 @@ export async function checkAndReDispatch(jobId: string, round: number): Promise<
     return;
   }
 
+  await expireTimedOutDispatches(jobId);
+
   if (round >= MATCHING.MAX_ROUNDS) {
     await expireJob(jobId);
     return;
@@ -256,17 +298,22 @@ export async function checkAndReDispatch(jobId: string, round: number): Promise<
 }
 
 export async function recordDecline(jobId: string, workerId: string): Promise<void> {
-  const state = getState(jobId);
-  state.declinedWorkerIds.add(workerId);
+  const { error: declineError } = await supabaseAdmin
+    .from("job_dispatches")
+    .update({ status: "declined", responded_at: new Date().toISOString() })
+    .eq("job_id", jobId)
+    .eq("worker_id", workerId)
+    .in("status", ["sent", "seen"]);
+  if (declineError) logger(`dispatch decline warning: ${declineError.message}`);
 
   const job = await fetchJob(jobId);
   if (!job || ![JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status)) return;
 
-  const roundDispatched = [...state.dispatchedWorkerIds];
-  const allDeclined =
-    roundDispatched.length > 0 && roundDispatched.every((id) => state.declinedWorkerIds.has(id));
+  await expireTimedOutDispatches(jobId);
 
-  if (allDeclined) {
+  const active = await getActiveDispatchCount(jobId);
+  if (active === 0) {
+    const state = getState(jobId);
     if (state.timeout) clearTimeout(state.timeout);
     if (state.round >= MATCHING.MAX_ROUNDS) {
       await expireJob(jobId);
@@ -274,6 +321,76 @@ export async function recordDecline(jobId: string, workerId: string): Promise<vo
       await findAndDispatch(jobId, state.round + 1);
     }
   }
+}
+
+async function getActiveDispatchCount(jobId: string): Promise<number> {
+  const { count, error } = await supabaseAdmin
+    .from("job_dispatches")
+    .select("job_id", { count: "exact", head: true })
+    .eq("job_id", jobId)
+    .in("status", ["sent", "seen"]);
+  if (error) {
+    logger(`active dispatch count warning: ${error.message}`);
+    return 0;
+  }
+  return count ?? 0;
+}
+
+export async function expireTimedOutDispatches(jobId?: string): Promise<void> {
+  const now = new Date().toISOString();
+  let query = supabaseAdmin
+    .from("job_dispatches")
+    .update({ status: "expired", responded_at: now })
+    .lt("expires_at", now)
+    .in("status", ["sent", "seen"]);
+
+  if (jobId) query = query.eq("job_id", jobId);
+
+  const { error } = await query;
+  if (error) logger(`timed-out dispatch expiry warning: ${error.message}`);
+}
+
+export async function recoverTimedOutMatchingJobs(): Promise<void> {
+  await expireTimedOutDispatches();
+
+  const { data: jobs, error } = await supabaseAdmin
+    .from("jobs")
+    .select("id, status")
+    .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING]);
+
+  if (error) {
+    logger(`matching recovery fetch warning: ${error.message}`);
+    return;
+  }
+
+  for (const job of jobs ?? []) {
+    const active = await getActiveDispatchCount(job.id);
+    if (active > 0) continue;
+
+    const round = await getLatestDispatchRound(job.id);
+    if (round >= MATCHING.MAX_ROUNDS) {
+      await expireJob(job.id);
+    } else {
+      await findAndDispatch(job.id, round + 1);
+    }
+  }
+}
+
+async function getLatestDispatchRound(jobId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin
+    .from("job_dispatches")
+    .select("round")
+    .eq("job_id", jobId)
+    .order("round", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    logger(`latest dispatch round warning: ${error.message}`);
+    return 0;
+  }
+
+  return Number(data?.round ?? 0);
 }
 
 export async function expireStaleJobs(): Promise<void> {
