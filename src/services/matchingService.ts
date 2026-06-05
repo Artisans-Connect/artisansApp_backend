@@ -3,6 +3,7 @@ import { JOB_STATUS, MATCHING } from "../constants/enums";
 import { appError } from "../utils/appError";
 import { haversineKm } from "../utils/haversine";
 import { isLocationFresh } from "../utils/locationFreshness";
+import { workerHasCategorySkill } from "../utils/skillMatch";
 import { logger } from "../utils/logger";
 import * as notifyService from "./notifyService";
 
@@ -12,6 +13,7 @@ type WorkerRow = {
   current_lng: number | null;
   location_at: string | null;
   rating: number | null;
+  total_jobs: number | null;
   skills: string[] | null;
   is_available: boolean;
   is_verified: boolean;
@@ -67,9 +69,8 @@ async function fetchCandidateWorkers(
 
   const { data, error } = await supabaseAdmin
     .from("workers")
-    .select("id, current_lat, current_lng, location_at, rating, skills, is_available, is_verified")
-    .eq("is_available", true)
-    .eq("is_verified", true);
+    .select("id, current_lat, current_lng, location_at, rating, total_jobs, skills, is_available, is_verified")
+    .eq("is_available", true);
 
   if (error) throw appError(500, error.message, "WORKERS_FETCH_FAILED");
 
@@ -77,8 +78,7 @@ async function fetchCandidateWorkers(
     if (excludeIds.has(worker.id)) return false;
     if (worker.current_lat == null || worker.current_lng == null) return false;
     if (!isLocationFresh(worker.location_at)) return false;
-    const skills = (worker.skills ?? []).map((s: string) => s.toLowerCase());
-    if (categoryKey && skills.length > 0 && !skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s))) {
+    if (categoryKey && !workerHasCategorySkill(worker.skills, categoryKey)) {
       return false;
     }
     const distance = haversineKm(job.location_lat, job.location_lng, worker.current_lat, worker.current_lng);
@@ -89,13 +89,42 @@ async function fetchCandidateWorkers(
 function rankWorkers(
   workers: WorkerRow[],
   job: { location_lat: number; location_lng: number },
+  radiusKm: number,
 ): WorkerRow[] {
   return [...workers].sort((a, b) => {
-    const distA = haversineKm(job.location_lat, job.location_lng, a.current_lat!, a.current_lng!);
-    const distB = haversineKm(job.location_lat, job.location_lng, b.current_lat!, b.current_lng!);
-    if (distA !== distB) return distA - distB;
-    return (b.rating ?? 0) - (a.rating ?? 0);
+    return scoreWorker(b, job, radiusKm) - scoreWorker(a, job, radiusKm);
   });
+}
+
+function scoreWorker(
+  worker: WorkerRow,
+  job: { location_lat: number; location_lng: number },
+  radiusKm: number,
+): number {
+  const distanceKm = haversineKm(job.location_lat, job.location_lng, worker.current_lat!, worker.current_lng!);
+  const proximityScore = Math.max(0, 1 - distanceKm / Math.max(radiusKm, 1));
+  const ratingScore = Math.max(0, Math.min(Number(worker.rating ?? 0) / 5, 1));
+  const verificationScore = worker.is_verified ? 1 : 0;
+  const freshnessScore = locationFreshnessScore(worker.location_at);
+  const jobsScore = Math.max(0, Math.min(Number(worker.total_jobs ?? 0) / 50, 1));
+
+  return (
+    proximityScore * 0.4 +
+    ratingScore * 0.25 +
+    verificationScore * 0.2 +
+    freshnessScore * 0.1 +
+    jobsScore * 0.05
+  );
+}
+
+function locationFreshnessScore(locationAt: string | null): number {
+  if (!locationAt) return 0;
+  const ageMinutes = (Date.now() - new Date(locationAt).getTime()) / (1000 * 60);
+  if (!Number.isFinite(ageMinutes) || ageMinutes < 0) return 0.5;
+  if (ageMinutes <= 5) return 1;
+  if (ageMinutes <= 15) return 0.75;
+  if (ageMinutes <= 30) return 0.5;
+  return 0.25;
 }
 
 async function recordDispatches(
@@ -148,7 +177,7 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
 
   while (batch.length === 0 && state.radiusIndex < MATCHING.RADIUS_STEPS_KM.length) {
     radiusKm = MATCHING.RADIUS_STEPS_KM[state.radiusIndex]!;
-    const candidates = rankWorkers(await fetchCandidateWorkers(job, exclude, radiusKm), job);
+    const candidates = rankWorkers(await fetchCandidateWorkers(job, exclude, radiusKm), job, radiusKm);
     batch = candidates.slice(0, MATCHING.WORKERS_PER_ROUND);
     if (batch.length === 0) {
       state.radiusIndex += 1;

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
 import { haversineKm } from "../utils/haversine";
+import { workerHasCategorySkill } from "../utils/skillMatch";
 
 // Reference point: Kumasi CBD (city center for distance proxy)
 const KUMASI_CBD_LAT = 6.6885;
@@ -10,6 +11,7 @@ const KUMASI_CBD_LNG = -1.6244;
 const DISTANCE_RATE_PER_KM = 3.0; // GH₵ per km
 const URGENCY_PREMIUM_PERCENT = 0.20; // +20% for ASAP
 const VERIFICATION_PREMIUM_PERCENT = 0.15; // +15% for verified clients
+const VERIFIED_WORKER_MARKET_PREMIUM_PERCENT = 0.08; // +8% when verified supply exists nearby
 const ABSOLUTE_MINIMUM_FEE = 50; // Floor in GH₵
 const DEFAULT_BASE_FEE = 80; // Fallback if category has no base_fee
 
@@ -18,6 +20,7 @@ export interface FeeBreakdown {
   distance_cost: number;
   urgency_premium: number;
   verification_premium: number;
+  verified_worker_market_premium: number;
 }
 
 export interface FeeEstimate {
@@ -68,9 +71,17 @@ export async function estimateFee(
   const verificationPremium = isVerified
     ? Math.round(subtotal * VERIFICATION_PREMIUM_PERCENT)
     : 0;
+  const verifiedWorkerMarketPremium = await hasVerifiedWorkerMarket(
+    categoryId,
+    locationLat,
+    locationLng,
+  )
+    ? Math.round(subtotal * VERIFIED_WORKER_MARKET_PREMIUM_PERCENT)
+    : 0;
 
   // 5. Final minimum fee
-  const totalFee = subtotal + urgencyPremium + verificationPremium;
+  const totalFee =
+    subtotal + urgencyPremium + verificationPremium + verifiedWorkerMarketPremium;
   const minimumFee = Math.max(totalFee, ABSOLUTE_MINIMUM_FEE);
 
   return {
@@ -80,6 +91,32 @@ export async function estimateFee(
       distance_cost: distanceCost,
       urgency_premium: urgencyPremium,
       verification_premium: verificationPremium,
+      verified_worker_market_premium: verifiedWorkerMarketPremium,
     },
   };
+}
+
+async function hasVerifiedWorkerMarket(
+  categoryId: string,
+  locationLat: number,
+  locationLng: number,
+): Promise<boolean> {
+  const [{ data: category }, { data: workers, error }] = await Promise.all([
+    supabaseAdmin.from("categories").select("name, slug").eq("id", categoryId).maybeSingle(),
+    supabaseAdmin
+      .from("workers")
+      .select("id, current_lat, current_lng, location_at, skills")
+      .eq("is_available", true)
+      .eq("is_verified", true)
+      .limit(50),
+  ]);
+
+  if (error) throw appError(500, error.message, "VERIFIED_MARKET_FETCH_FAILED");
+
+  const categoryKey = (category?.slug ?? category?.name ?? "").toLowerCase();
+  return (workers ?? []).some((worker) => {
+    if (worker.current_lat == null || worker.current_lng == null) return false;
+    if (categoryKey && !workerHasCategorySkill(worker.skills, categoryKey)) return false;
+    return haversineKm(locationLat, locationLng, worker.current_lat, worker.current_lng) <= 10;
+  });
 }

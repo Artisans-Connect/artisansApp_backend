@@ -87,6 +87,15 @@ router.get(
   }),
 );
 
+router.put(
+  "/me/demo-verify",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const worker = await workersService.verifyMeForDemo(req.user!.id);
+    res.status(200).json({ success: true, data: worker });
+  }),
+);
+
 router.post(
   "/:jobId/start",
   authMiddleware,

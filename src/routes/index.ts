@@ -6,6 +6,7 @@ import workersRouter from "./workers";
 import reviewsRouter from "./reviews";
 import chatRouter from "./chat";
 import pricingRouter from "./pricing";
+import verificationRouter from "./verification";
 
 const router = Router();
 
@@ -17,5 +18,6 @@ router.use("/workers", workersRouter);
 router.use("/reviews", reviewsRouter);
 router.use("/chat", chatRouter);
 router.use("/pricing", pricingRouter);
+router.use("/verification", verificationRouter);
 
 export default router;

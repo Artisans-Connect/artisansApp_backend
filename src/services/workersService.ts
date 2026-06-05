@@ -4,6 +4,7 @@ import { JOB_STATUS } from "../constants/enums";
 import { haversineKm } from "../utils/haversine";
 import { isLocationFresh } from "../utils/locationFreshness";
 import { appError } from "../utils/appError";
+import { workerHasCategorySkill } from "../utils/skillMatch";
 import {
   nearbyWorkersSchema,
   updateAvailabilitySchema,
@@ -72,9 +73,9 @@ export async function getNearby(query: unknown) {
     );
 
   if (hasProximity) {
-    workersQuery = workersQuery.eq("is_available", true).eq("is_verified", true);
+    workersQuery = workersQuery.eq("is_available", true);
   } else if (env.NODE_ENV !== "development") {
-    workersQuery = workersQuery.eq("is_verified", true);
+    workersQuery = workersQuery.order("is_verified", { ascending: false });
   }
 
   const { data: workers, error } = await workersQuery;
@@ -87,15 +88,11 @@ export async function getNearby(query: unknown) {
     result = result.filter((w) => {
       if (!isLocationFresh(w.location_at)) return false;
       if (!categoryKey) return true;
-      const skills = (w.skills ?? []).map((s: string) => s.toLowerCase());
-      if (skills.length === 0) return false;
-      return skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s));
+      return workerHasCategorySkill(w.skills, categoryKey);
     });
   } else if (categoryKey) {
     result = result.filter((w) => {
-      const skills = (w.skills ?? []).map((s: string) => s.toLowerCase());
-      if (skills.length === 0) return false;
-      return skills.some((s: string) => s.includes(categoryKey) || categoryKey.includes(s));
+      return workerHasCategorySkill(w.skills, categoryKey);
     });
   }
 
@@ -107,10 +104,9 @@ export async function getNearby(query: unknown) {
         distance_km: haversineKm(lat, lng, w.current_lat!, w.current_lng!),
       }))
       .filter((w) => w.distance_km <= radius_km)
-      .sort((a, b) => a.distance_km - b.distance_km || (b.rating ?? 0) - (a.rating ?? 0));
+      .sort((a, b) => scoreNearbyWorker(b, radius_km) - scoreNearbyWorker(a, radius_km));
   } else {
-    // If no location provided, just sort by rating (highest first)
-    result = result.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+    result = result.sort((a, b) => Number(b.is_verified) - Number(a.is_verified) || (b.rating ?? 0) - (a.rating ?? 0));
   }
 
   return result.slice(0, limit);
@@ -123,7 +119,7 @@ export async function acceptJob(userId: string, jobId: string) {
     .eq("id", jobId)
     .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
     .is("worker_id", null)
-    .select()
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name)")
     .maybeSingle();
 
   if (error) throw appError(500, error.message, "JOB_ACCEPT_FAILED");
@@ -170,7 +166,7 @@ export async function updateWorkerProfile(userId: string, body: unknown) {
 export async function getActiveJob(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .select("*, profiles!jobs_client_id_fkey(full_name, avatar_url, phone)")
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone)")
     .eq("worker_id", userId)
     .in("status", [JOB_STATUS.MATCHED, JOB_STATUS.IN_PROGRESS])
     .order("updated_at", { ascending: false })
@@ -204,7 +200,7 @@ export async function getHistory(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, status, budget_fixed, budget_min, budget_max, address_label, updated_at, categories(name), profiles!jobs_client_id_fkey(full_name, avatar_url)",
+      "id, title, status, budget_fixed, budget_min, budget_max, address_label, updated_at, categories(name), client:profiles!jobs_client_id_fkey(full_name, avatar_url)",
     )
     .eq("worker_id", userId)
     .in("status", [JOB_STATUS.COMPLETED, JOB_STATUS.CANCELLED])
@@ -228,7 +224,7 @@ export async function getJobRequests(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, description, status, budget_min, budget_max, address_label, location_lat, location_lng, created_at, categories(name), profiles!jobs_client_id_fkey(full_name)",
+      "id, title, description, status, budget_min, budget_max, address_label, location_lat, location_lng, created_at, categories(name), client:profiles!jobs_client_id_fkey(full_name)",
     )
     .in("id", jobIds)
     .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
@@ -237,4 +233,27 @@ export async function getJobRequests(userId: string) {
 
   if (error) throw appError(500, error.message, "JOBS_FETCH_FAILED");
   return data ?? [];
+}
+
+function scoreNearbyWorker(worker: any, radiusKm: number): number {
+  const proximityScore = Math.max(0, 1 - Number(worker.distance_km ?? radiusKm) / Math.max(radiusKm, 1));
+  const ratingScore = Math.max(0, Math.min(Number(worker.rating ?? 0) / 5, 1));
+  const verificationScore = worker.is_verified ? 1 : 0;
+  return proximityScore * 0.5 + ratingScore * 0.3 + verificationScore * 0.2;
+}
+
+export async function verifyMeForDemo(userId: string) {
+  if (env.NODE_ENV === "production") {
+    throw appError(403, "Demo verification is disabled in production", "FORBIDDEN");
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("workers")
+    .update({ is_verified: true, updated_at: new Date().toISOString() })
+    .eq("id", userId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "WORKER_VERIFY_FAILED");
+  return data;
 }

@@ -139,7 +139,7 @@ export async function completeJob(userId: string, jobId: string) {
 export async function getMyJobs(userId: string, statusFilter?: string[]) {
   let query = supabaseAdmin
     .from("jobs")
-    .select("id, title, status, worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
+    .select("id, title, status, worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
     .eq("client_id", userId)
     .order("created_at", { ascending: false });
 
@@ -155,7 +155,7 @@ export async function getMyJobs(userId: string, statusFilter?: string[]) {
 export async function getJobById(userId: string, jobId: string) {
   const { data: job, error } = await supabaseAdmin
     .from("jobs")
-    .select("*, profiles!jobs_client_id_fkey(full_name, avatar_url, phone), profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
     .eq("id", jobId)
     .maybeSingle();
 

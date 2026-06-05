@@ -70,8 +70,21 @@ export async function getProfile(userId: string) {
     .eq("id", userId)
     .maybeSingle();
 
+  const { data: verification } = worker
+    ? await supabaseAdmin
+        .from("worker_verifications")
+        .select("status, verification_level, application_number")
+        .eq("worker_id", userId)
+        .order("submitted_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    : { data: null };
+
   return {
     ...profile,
+    verification_status: verification?.status ?? null,
+    verification_level: verification?.verification_level ?? null,
+    verification_application_number: verification?.application_number ?? null,
     worker: worker ?? null,
     has_worker_profile: worker != null,
   };

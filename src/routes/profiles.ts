@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { catchAsync } from "../utils/catchAsync";
 import * as profilesService from "../services/profilesService";
+import { paramId } from "../utils/routeParams";
 
 const router = Router();
 
@@ -56,6 +57,15 @@ router.put(
   catchAsync(async (req: Request, res: Response) => {
     const result = await profilesService.updateFcmToken(req.user!.id, req.body);
     res.status(200).json(result);
+  }),
+);
+
+router.get(
+  "/:id",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const profile = await profilesService.getProfile(paramId(req.params.id));
+    res.status(200).json({ success: true, data: profile });
   }),
 );
 
