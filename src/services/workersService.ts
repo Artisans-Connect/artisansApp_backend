@@ -14,6 +14,13 @@ import {
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
 
+const ACTIVE_WORKER_JOB_STATUSES = [
+  JOB_STATUS.MATCHED,
+  JOB_STATUS.ON_THE_WAY,
+  JOB_STATUS.ARRIVED,
+  JOB_STATUS.IN_PROGRESS,
+];
+
 export async function updateLocation(userId: string, body: unknown) {
   const parsed = updateLocationSchema.safeParse(body);
   if (!parsed.success) {
@@ -188,9 +195,9 @@ export async function updateWorkerProfile(userId: string, body: unknown) {
 export async function getActiveJob(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone)")
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
     .eq("worker_id", userId)
-    .in("status", [JOB_STATUS.MATCHED, JOB_STATUS.IN_PROGRESS])
+    .in("status", ACTIVE_WORKER_JOB_STATUSES)
     .order("updated_at", { ascending: false })
     .maybeSingle();
 
@@ -198,20 +205,59 @@ export async function getActiveJob(userId: string) {
   return data;
 }
 
-export async function startJob(userId: string, jobId: string) {
+async function transitionAssignedJob(
+  userId: string,
+  jobId: string,
+  allowedStatuses: string[],
+  nextStatus: string,
+  errorMessage: string,
+) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .update({ status: JOB_STATUS.IN_PROGRESS, updated_at: new Date().toISOString() })
+    .update({ status: nextStatus, updated_at: new Date().toISOString() })
     .eq("id", jobId)
     .eq("worker_id", userId)
-    .eq("status", JOB_STATUS.MATCHED)
-    .select()
+    .in("status", allowedStatuses)
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name)")
     .maybeSingle();
 
-  if (error) throw appError(500, error.message, "JOB_START_FAILED");
-  if (!data) {
-    throw appError(409, "Job cannot be started — wrong status or not assigned to you", "INVALID_JOB_STATE");
-  }
+  if (error) throw appError(500, error.message, "JOB_TRANSITION_FAILED");
+  if (!data) throw appError(409, errorMessage, "INVALID_JOB_STATE");
+  return data;
+}
+
+export async function markOnTheWay(userId: string, jobId: string) {
+  const data = await transitionAssignedJob(
+    userId,
+    jobId,
+    [JOB_STATUS.MATCHED],
+    JOB_STATUS.ON_THE_WAY,
+    "Job can only be marked on the way after it is accepted",
+  );
+  await notifyService.notifyWorkerOnTheWay(data.client_id);
+  return data;
+}
+
+export async function markArrived(userId: string, jobId: string) {
+  const data = await transitionAssignedJob(
+    userId,
+    jobId,
+    [JOB_STATUS.MATCHED, JOB_STATUS.ON_THE_WAY],
+    JOB_STATUS.ARRIVED,
+    "Job can only be marked arrived before work starts",
+  );
+  await notifyService.notifyWorkerArrived(data.client_id);
+  return data;
+}
+
+export async function startJob(userId: string, jobId: string) {
+  const data = await transitionAssignedJob(
+    userId,
+    jobId,
+    [JOB_STATUS.ARRIVED],
+    JOB_STATUS.IN_PROGRESS,
+    "Job can only be started after you mark arrival",
+  );
 
   await notifyService.notifyJobStarted(data.client_id);
 
@@ -222,7 +268,7 @@ export async function getHistory(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, status, budget_fixed, budget_min, budget_max, address_label, updated_at, categories(name), client:profiles!jobs_client_id_fkey(full_name, avatar_url)",
+      "id, title, description, status, budget_fixed, budget_min, budget_max, budget_type, address_label, location_lat, location_lng, updated_at, categories(name), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)",
     )
     .eq("worker_id", userId)
     .in("status", [JOB_STATUS.COMPLETED, JOB_STATUS.CANCELLED])

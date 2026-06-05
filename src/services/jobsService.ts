@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "../config/supabase";
 import { JOB_MODE, JOB_STATUS, MATCHING } from "../constants/enums";
 import { appError } from "../utils/appError";
-import { createJobSchema, initialJobStatus } from "../validators/jobs.validator";
+import { completeJobSchema, createJobSchema, initialJobStatus } from "../validators/jobs.validator";
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
 
@@ -123,11 +123,51 @@ export async function cancelJob(userId: string, jobId: string) {
 }
 
 export async function completeJob(userId: string, jobId: string) {
+  return completeJobWithDetails(userId, jobId, {});
+}
+
+export async function completeJobWithDetails(userId: string, jobId: string, body: unknown) {
+  const parsed = completeJobSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid completion details", "VALIDATION_ERROR");
+  }
+
   const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
 
   const isParticipant = job.client_id === userId || job.worker_id === userId;
   if (!isParticipant) throw appError(403, "Not allowed to complete this job", "FORBIDDEN");
+  if (job.status !== JOB_STATUS.IN_PROGRESS) {
+    throw appError(409, "Job must be in progress before completion", "INVALID_JOB_STATE");
+  }
+
+  if (job.worker_id) {
+    const input = parsed.data;
+    const hasCompletionDetails =
+      input.hours_spent != null ||
+      Boolean(input.materials_used) ||
+      Boolean(input.notes) ||
+      input.photo_urls.length > 0;
+
+    if (hasCompletionDetails) {
+      if (userId !== job.worker_id) {
+        throw appError(403, "Only the assigned worker can submit completion details", "FORBIDDEN");
+      }
+      const { error: detailsError } = await supabaseAdmin.from("job_completion_details").upsert(
+        {
+          job_id: jobId,
+          worker_id: job.worker_id,
+          hours_spent: input.hours_spent ?? null,
+          materials_used: input.materials_used ?? null,
+          notes: input.notes ?? null,
+          photo_urls: input.photo_urls,
+        },
+        { onConflict: "job_id" },
+      );
+
+      if (detailsError) throw appError(500, detailsError.message, "JOB_COMPLETION_DETAILS_FAILED");
+    }
+  }
 
   const { data, error } = await supabaseAdmin
     .from("jobs")
@@ -147,7 +187,7 @@ export async function completeJob(userId: string, jobId: string) {
 export async function getMyJobs(userId: string, statusFilter?: string[]) {
   let query = supabaseAdmin
     .from("jobs")
-    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone)")
+    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
     .eq("client_id", userId)
     .order("created_at", { ascending: false });
 
@@ -202,7 +242,7 @@ export async function getMatchingProgress(userId: string, jobId: string) {
 export async function getJobById(userId: string, jobId: string) {
   const { data: job, error } = await supabaseAdmin
     .from("jobs")
-    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
     .eq("id", jobId)
     .maybeSingle();
 

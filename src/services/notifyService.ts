@@ -89,9 +89,25 @@ export async function notifyJobMatched(clientId: string, workerName: string): Pr
 
 export async function notifyJobStarted(clientId: string): Promise<void> {
   await sendToUser(clientId, {
-    title: "Artisan on the way",
+    title: "Work started",
     body: "Your artisan has started the job",
     data: { type: "job_started" },
+  });
+}
+
+export async function notifyWorkerOnTheWay(clientId: string): Promise<void> {
+  await sendToUser(clientId, {
+    title: "Artisan on the way",
+    body: "Your artisan is heading to your location",
+    data: { type: "worker_on_the_way" },
+  });
+}
+
+export async function notifyWorkerArrived(clientId: string): Promise<void> {
+  await sendToUser(clientId, {
+    title: "Artisan arrived",
+    body: "Your artisan has arrived at the job location",
+    data: { type: "worker_arrived" },
   });
 }
 

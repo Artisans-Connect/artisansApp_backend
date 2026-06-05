@@ -43,3 +43,10 @@ export function initialJobStatus(jobMode: string): string {
   if (jobMode === JOB_MODE.ASAP) return JOB_STATUS.SEARCHING;
   return JOB_STATUS.DRAFT;
 }
+
+export const completeJobSchema = z.object({
+  hours_spent: z.number().positive().max(999.99).optional(),
+  materials_used: z.string().trim().max(1000).optional(),
+  notes: z.string().trim().max(2000).optional(),
+  photo_urls: z.array(z.string().url()).default([]),
+});

@@ -49,7 +49,7 @@ router.post(
   "/:id/complete",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
-    const job = await jobsService.completeJob(req.user!.id, paramId(req.params.id));
+    const job = await jobsService.completeJobWithDetails(req.user!.id, paramId(req.params.id), req.body ?? {});
     res.status(200).json({ success: true, data: job });
   }),
 );

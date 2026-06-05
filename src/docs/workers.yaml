@@ -280,7 +280,7 @@ paths:
                       type: object
   /api/workers/{jobId}/start:
     post:
-      summary: Mark an accepted job as started/in-progress
+      summary: Mark an arrived job as started/in-progress
       tags:
         - Workers
       security:
@@ -306,6 +306,40 @@ paths:
                     example: true
                   data:
                     type: object
+  /api/workers/{jobId}/on-way:
+    post:
+      summary: Mark an accepted job as on the way
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+          description: The Job UUID
+      responses:
+        200:
+          description: Job status updated to on_the_way
+  /api/workers/{jobId}/arrive:
+    post:
+      summary: Mark an accepted/on-the-way job as arrived
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+          description: The Job UUID
+      responses:
+        200:
+          description: Job status updated to arrived
 components:
   securitySchemes:
     BearerAuth:

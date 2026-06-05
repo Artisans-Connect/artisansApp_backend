@@ -106,6 +106,24 @@ router.put(
 );
 
 router.post(
+  "/:jobId/on-way",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await workersService.markOnTheWay(req.user!.id, paramId(req.params.jobId));
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.post(
+  "/:jobId/arrive",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await workersService.markArrived(req.user!.id, paramId(req.params.jobId));
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.post(
   "/:jobId/start",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
