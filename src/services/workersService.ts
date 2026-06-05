@@ -249,7 +249,7 @@ export async function getJobRequests(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, description, status, budget_min, budget_max, address_label, location_lat, location_lng, created_at, categories(name), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone)",
+      "id, title, description, status, budget_min, budget_max, budget_fixed, budget_type, address_label, location_lat, location_lng, created_at, categories(name), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone)",
     )
     .in("id", jobIds)
     .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
