@@ -17,6 +17,58 @@ async function assertJobParticipant(userId: string, jobId: string) {
   return job;
 }
 
+async function assertDirectParticipant(userId: string, conversationId: string) {
+  const { data: conversation } = await supabaseAdmin
+    .from("direct_conversations")
+    .select("id, client_id, worker_id")
+    .eq("id", conversationId)
+    .maybeSingle();
+
+  if (!conversation) return null;
+  if (conversation.client_id !== userId && conversation.worker_id !== userId) {
+    throw appError(403, "Not allowed to access this conversation", "FORBIDDEN");
+  }
+  return conversation;
+}
+
+async function assertConversationParticipant(userId: string, id: string) {
+  const direct = await assertDirectParticipant(userId, id);
+  if (direct) return { type: "direct" as const, conversation: direct };
+  const job = await assertJobParticipant(userId, id);
+  return { type: "job" as const, conversation: job };
+}
+
+export async function createDirectConversation(userId: string, body: unknown) {
+  const workerId = (body as { worker_id?: string })?.worker_id;
+  if (!workerId) throw appError(400, "worker_id is required", "VALIDATION_ERROR");
+  if (workerId === userId) throw appError(400, "You cannot message yourself", "SELF_CONVERSATION");
+
+  const { data: worker } = await supabaseAdmin
+    .from("workers")
+    .select("id")
+    .eq("id", workerId)
+    .maybeSingle();
+  if (!worker) throw appError(404, "Worker not found", "WORKER_NOT_FOUND");
+
+  const { data, error } = await supabaseAdmin
+    .from("direct_conversations")
+    .upsert(
+      {
+        client_id: userId,
+        worker_id: workerId,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "client_id,worker_id" },
+    )
+    .select(
+      "id, client_id, worker_id, updated_at, worker:profiles!direct_conversations_worker_id_fkey(full_name, avatar_url)",
+    )
+    .single();
+
+  if (error) throw appError(500, error.message, "DIRECT_CONVERSATION_FAILED");
+  return data;
+}
+
 export async function listConversations(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
@@ -46,7 +98,7 @@ export async function listConversations(userId: string) {
     }
   }
 
-  return jobs.map((job) => {
+  const jobConversations = jobs.map((job) => {
     const isClient = job.client_id === userId;
     const counterpart = isClient ? job.worker : job.client;
     const counterpartProfile = counterpart as { full_name?: string; avatar_url?: string } | null;
@@ -64,35 +116,94 @@ export async function listConversations(userId: string) {
       counterpart_avatar_url: counterpartProfile?.avatar_url ?? null,
       last_message_preview: last?.content ?? job.title,
       last_message_at: last?.created_at ?? job.updated_at,
+      type: "job",
     };
   });
+
+  const { data: directConversations, error: directError } = await supabaseAdmin
+    .from("direct_conversations")
+    .select(
+      "id, client_id, worker_id, updated_at, client:profiles!direct_conversations_client_id_fkey(full_name, avatar_url), worker:profiles!direct_conversations_worker_id_fkey(full_name, avatar_url)",
+    )
+    .or(`client_id.eq.${userId},worker_id.eq.${userId}`)
+    .order("updated_at", { ascending: false });
+
+  if (directError) throw appError(500, directError.message, "DIRECT_CONVERSATIONS_FETCH_FAILED");
+
+  const directIds = (directConversations ?? []).map((c) => c.id);
+  const { data: latestDirectMessages } = directIds.length === 0
+    ? { data: [] }
+    : await supabaseAdmin
+        .from("messages")
+        .select("conversation_id, content, created_at")
+        .in("conversation_id", directIds)
+        .order("created_at", { ascending: false });
+
+  const lastByConversation = new Map<string, { content: string; created_at: string }>();
+  for (const msg of latestDirectMessages ?? []) {
+    if (msg.conversation_id && !lastByConversation.has(msg.conversation_id)) {
+      lastByConversation.set(msg.conversation_id, {
+        content: msg.content,
+        created_at: msg.created_at,
+      });
+    }
+  }
+
+  const direct = (directConversations ?? []).map((conversation) => {
+    const isClient = conversation.client_id === userId;
+    const counterpart = isClient ? conversation.worker : conversation.client;
+    const profile = counterpart as { full_name?: string; avatar_url?: string } | null;
+    const last = lastByConversation.get(conversation.id);
+    return {
+      id: conversation.id,
+      title: "Enquiry",
+      status: "direct",
+      client_id: conversation.client_id,
+      worker_id: conversation.worker_id,
+      updated_at: conversation.updated_at,
+      counterpart_id: isClient ? conversation.worker_id : conversation.client_id,
+      counterpart_name: profile?.full_name ?? "User",
+      counterpart_avatar_url: profile?.avatar_url ?? null,
+      last_message_preview: last?.content ?? "Start an enquiry",
+      last_message_at: last?.created_at ?? conversation.updated_at,
+      type: "direct",
+    };
+  });
+
+  return [...jobConversations, ...direct].sort(
+    (a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime(),
+  );
 }
 
-export async function getMessages(userId: string, jobId: string) {
-  await assertJobParticipant(userId, jobId);
+export async function getMessages(userId: string, conversationId: string) {
+  const conversation = await assertConversationParticipant(userId, conversationId);
 
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from("messages")
-    .select("id, job_id, sender_id, content, image_urls, is_read, created_at")
-    .eq("job_id", jobId)
-    .order("created_at", { ascending: true });
+    .select("id, job_id, conversation_id, sender_id, content, image_urls, is_read, created_at");
+  query = conversation.type === "direct"
+    ? query.eq("conversation_id", conversationId)
+    : query.eq("job_id", conversationId);
+
+  const { data, error } = await query.order("created_at", { ascending: true });
 
   if (error) throw appError(500, error.message, "MESSAGES_FETCH_FAILED");
   return data ?? [];
 }
 
-export async function sendMessage(userId: string, jobId: string, body: unknown) {
+export async function sendMessage(userId: string, conversationId: string, body: unknown) {
   const parsed = sendMessageSchema.safeParse(body);
   if (!parsed.success) {
     throw appError(400, parsed.error.issues[0]?.message ?? "Invalid message payload", "VALIDATION_ERROR");
   }
 
-  const job = await assertJobParticipant(userId, jobId);
+  const conversation = await assertConversationParticipant(userId, conversationId);
 
   const { data, error } = await supabaseAdmin
     .from("messages")
     .insert({
-      job_id: jobId,
+      job_id: conversation.type === "job" ? conversationId : null,
+      conversation_id: conversation.type === "direct" ? conversationId : null,
       sender_id: userId,
       content: parsed.data.content,
       image_urls: parsed.data.image_urls,
@@ -102,9 +213,17 @@ export async function sendMessage(userId: string, jobId: string, body: unknown) 
 
   if (error) throw appError(500, error.message, "MESSAGE_SEND_FAILED");
 
-  const recipientId = job.client_id === userId ? job.worker_id : job.client_id;
+  if (conversation.type === "direct") {
+    await supabaseAdmin
+      .from("direct_conversations")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", conversationId);
+  }
+
+  const target = conversation.conversation;
+  const recipientId = target.client_id === userId ? target.worker_id : target.client_id;
   if (recipientId) {
-    await notifyService.notifyChatMessage(recipientId, jobId, parsed.data.content.slice(0, 120));
+    await notifyService.notifyChatMessage(recipientId, conversationId, parsed.data.content.slice(0, 120));
   }
 
   return data;

@@ -15,6 +15,15 @@ router.get(
   }),
 );
 
+router.post(
+  "/direct",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const conversation = await chatService.createDirectConversation(req.user!.id, req.body);
+    res.status(201).json({ success: true, data: conversation });
+  }),
+);
+
 router.get(
   "/:id/messages",
   authMiddleware,

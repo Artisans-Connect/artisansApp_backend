@@ -203,6 +203,63 @@ export async function submitApplication(userId: string | null, body: unknown) {
   return verification;
 }
 
+async function syncApprovedVerificationToAccount(verification: Record<string, any>) {
+  const workerId = verification.worker_id as string | undefined;
+  if (!workerId) return;
+
+  const now = new Date().toISOString();
+  const locationParts = [verification.current_city, verification.current_region]
+    .map((part) => (typeof part === "string" ? part.trim() : ""))
+    .filter(Boolean);
+
+  const profilePatch: Record<string, unknown> = { updated_at: now };
+  if (typeof verification.full_name === "string" && verification.full_name.trim()) {
+    profilePatch.full_name = verification.full_name.trim();
+  }
+  if (typeof verification.phone_number === "string" && verification.phone_number.trim()) {
+    profilePatch.phone = verification.phone_number.trim();
+  }
+  if (locationParts.length > 0) {
+    profilePatch.location_label = locationParts.join(", ");
+  }
+
+  const { data: worker } = await supabaseAdmin
+    .from("workers")
+    .select("skills, service_areas")
+    .eq("id", workerId)
+    .maybeSingle();
+
+  const existingSkills = Array.isArray(worker?.skills) ? worker.skills : [];
+  const trade = typeof verification.trade_category === "string" ? verification.trade_category.trim() : "";
+  const skills = trade && !existingSkills.some((skill: string) => skill.toLowerCase() === trade.toLowerCase())
+    ? [...existingSkills, trade]
+    : existingSkills;
+
+  const existingAreas = Array.isArray(worker?.service_areas) ? worker.service_areas : [];
+  const serviceAreas = [...existingAreas];
+  for (const part of locationParts) {
+    if (!serviceAreas.some((area: string) => area.toLowerCase() === part.toLowerCase())) {
+      serviceAreas.push(part);
+    }
+  }
+
+  const years = Number(verification.years_of_experience ?? 0);
+  const workerPatch: Record<string, unknown> = {
+    is_verified: true,
+    skills,
+    service_areas: serviceAreas,
+    updated_at: now,
+  };
+  if (Number.isFinite(years) && years > 0) {
+    workerPatch.experience_band = years === 1 ? "1 year" : `${years} years`;
+  }
+
+  await Promise.all([
+    supabaseAdmin.from("profiles").update(profilePatch).eq("id", workerId),
+    supabaseAdmin.from("workers").update(workerPatch).eq("id", workerId),
+  ]);
+}
+
 export async function setApplicationStatus(adminUserId: string, verificationId: string, body: unknown) {
   const parsed = statusSchema.safeParse(body);
   if (!parsed.success) {
@@ -245,6 +302,10 @@ export async function setApplicationStatus(adminUserId: string, verificationId: 
     action: input.status === "under_review" ? "reviewed" : input.status,
     notes: input.rejection_reason || input.more_info_message || input.admin_notes || `Application ${input.status}`,
   });
+
+  if (input.status === "approved") {
+    await syncApprovedVerificationToAccount(data);
+  }
 
   return data;
 }

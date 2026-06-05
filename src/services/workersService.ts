@@ -69,7 +69,7 @@ export async function getNearby(query: unknown) {
   let workersQuery = supabaseAdmin
     .from("workers")
     .select(
-      "id, current_lat, current_lng, location_at, rating, hourly_rate, is_available, is_verified, skills, service_areas, profiles!workers_id_fkey(full_name, avatar_url)",
+      "id, current_lat, current_lng, location_at, rating, hourly_rate, is_available, is_verified, skills, service_areas, profiles!workers_id_fkey(full_name, avatar_url, phone, bio, location_label)",
     );
 
   if (hasProximity) {
@@ -224,7 +224,7 @@ export async function getJobRequests(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, description, status, budget_min, budget_max, address_label, location_lat, location_lng, created_at, categories(name), client:profiles!jobs_client_id_fkey(full_name)",
+      "id, title, description, status, budget_min, budget_max, address_label, location_lat, location_lng, created_at, categories(name), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone)",
     )
     .in("id", jobIds)
     .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
