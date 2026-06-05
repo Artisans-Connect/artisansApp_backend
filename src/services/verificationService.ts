@@ -31,6 +31,20 @@ const applicationSchema = z.object({
     .default([]),
 });
 
+const documentUploadSchema = z.object({
+  handoff_code: z.string().min(16).optional(),
+  verification_id: z.string().uuid(),
+  files: z.array(
+    z.object({
+      document_type: z.enum(["id_front", "id_back", "selfie", "certification", "training", "portfolio"]),
+      file_name: z.string().trim().min(1),
+      mime_type: z.string().trim().min(1).default("application/octet-stream"),
+      size: z.number().int().min(1).max(10 * 1024 * 1024),
+      content_base64: z.string().trim().min(1),
+    }),
+  ).min(1),
+});
+
 const statusSchema = z.object({
   status: z.enum(["under_review", "approved", "rejected", "more_info_requested"]),
   verification_level: z.enum(["identity", "professional", "premium"]).optional(),
@@ -201,6 +215,73 @@ export async function submitApplication(userId: string | null, body: unknown) {
   }
 
   return verification;
+}
+
+export async function uploadApplicationDocuments(userId: string | null, body: unknown) {
+  const parsed = documentUploadSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid document upload", "VALIDATION_ERROR");
+  }
+
+  const input = parsed.data;
+  const workerId = userId ?? (input.handoff_code ? await workerIdFromHandoff(input.handoff_code) : null);
+  if (!workerId) throw appError(401, "Sign in or open verification from the app", "UNAUTHORIZED");
+
+  await ensureWorker(workerId);
+
+  const { data: verification, error: verificationError } = await supabaseAdmin
+    .from("worker_verifications")
+    .select("id, worker_id")
+    .eq("id", input.verification_id)
+    .eq("worker_id", workerId)
+    .maybeSingle();
+
+  if (verificationError) throw appError(500, verificationError.message, "VERIFICATION_FETCH_FAILED");
+  if (!verification) throw appError(404, "Verification application not found", "VERIFICATION_NOT_FOUND");
+
+  const uploadedDocuments = [] as Array<Record<string, unknown>>;
+
+  for (const file of input.files) {
+    const ext = file.file_name.split(".").pop()?.toLowerCase() || "bin";
+    const path = `${workerId}/${verification.id}/${file.document_type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const buffer = Buffer.from(file.content_base64, "base64");
+
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from("verification-docs")
+      .upload(path, buffer, { contentType: file.mime_type, upsert: true });
+
+    if (uploadError) throw appError(500, uploadError.message, "DOCUMENT_UPLOAD_FAILED");
+
+    const { data: urlData } = supabaseAdmin.storage.from("verification-docs").getPublicUrl(path);
+    const { error: insertError } = await supabaseAdmin.from("verification_documents").insert({
+      verification_id: verification.id,
+      worker_id: workerId,
+      document_type: file.document_type,
+      storage_path: path,
+      file_url: urlData.publicUrl,
+      file_name: file.file_name,
+      file_size: file.size,
+      mime_type: file.mime_type,
+    });
+
+    if (insertError) throw appError(500, insertError.message, "DOCUMENT_SAVE_FAILED");
+
+    uploadedDocuments.push({
+      document_type: file.document_type,
+      file_name: file.file_name,
+      file_url: urlData.publicUrl,
+      storage_path: path,
+    });
+  }
+
+  await supabaseAdmin.from("verification_audit_logs").insert({
+    verification_id: verification.id,
+    worker_id: workerId,
+    action: "documents_uploaded",
+    notes: "Documents uploaded by worker",
+  });
+
+  return uploadedDocuments;
 }
 
 async function syncApprovedVerificationToAccount(verification: Record<string, any>) {

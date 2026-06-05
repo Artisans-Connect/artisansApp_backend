@@ -52,6 +52,15 @@ router.post(
   }),
 );
 
+router.post(
+  "/me/application/documents",
+  catchAsync(async (req: Request, res: Response) => {
+    const userId = await readBearerUserId(req);
+    const documents = await verificationService.uploadApplicationDocuments(userId, req.body);
+    res.status(201).json({ success: true, data: documents });
+  }),
+);
+
 router.patch(
   "/applications/:id/status",
   authMiddleware,
