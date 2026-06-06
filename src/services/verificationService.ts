@@ -25,7 +25,7 @@ const applicationSchema = z.object({
       z.object({
         reference_name: z.string().trim().min(1),
         phone_number: z.string().trim().min(1),
-        relationship: z.string().trim().min(1),
+        relationship: z.string().trim().optional().default(""),
       }),
     )
     .default([]),

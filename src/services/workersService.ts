@@ -264,11 +264,41 @@ export async function startJob(userId: string, jobId: string) {
   return data;
 }
 
+export async function cancelAssignedJob(userId: string, jobId: string, body: unknown) {
+  const reason =
+    body && typeof body === "object" && "reason" in body
+      ? String((body as { reason?: unknown }).reason ?? "").trim()
+      : "";
+
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .update({
+      status: JOB_STATUS.CANCELLED,
+      cancelled_by: "worker",
+      cancelled_reason: reason || null,
+      cancelled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .eq("worker_id", userId)
+    .in("status", ACTIVE_WORKER_JOB_STATUSES)
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name)")
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "JOB_CANCEL_FAILED");
+  if (!data) throw appError(409, "Only your active assigned jobs can be cancelled", "INVALID_JOB_STATE");
+
+  matchingService.clearDispatchState(jobId);
+  await matchingService.markWorkerCancelledDispatch(jobId, userId);
+  await notifyService.notifyWorkerCancelledJob(data.client_id, jobId);
+  return data;
+}
+
 export async function getHistory(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, description, status, budget_fixed, budget_min, budget_max, budget_type, address_label, location_lat, location_lng, updated_at, categories(name), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)",
+      "id, title, description, status, budget_fixed, budget_min, budget_max, budget_type, address_label, location_lat, location_lng, updated_at, cancelled_by, cancelled_reason, cancelled_at, categories(name), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)",
     )
     .eq("worker_id", userId)
     .in("status", [JOB_STATUS.COMPLETED, JOB_STATUS.CANCELLED])

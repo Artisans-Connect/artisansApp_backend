@@ -143,6 +143,14 @@ export async function notifyJobCancelled(workerId: string, jobId: string): Promi
   });
 }
 
+export async function notifyWorkerCancelledJob(clientId: string, jobId: string): Promise<void> {
+  await sendToUser(clientId, {
+    title: "Artisan cancelled",
+    body: "Your artisan cancelled this job. You can request another worker.",
+    data: { type: "worker_cancelled_job", jobId },
+  });
+}
+
 export async function notifyChatMessage(
   recipientId: string,
   jobId: string,

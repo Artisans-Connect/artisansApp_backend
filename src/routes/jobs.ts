@@ -46,6 +46,15 @@ router.post(
 );
 
 router.post(
+  "/:id/request-another-worker",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await jobsService.requestAnotherWorker(req.user!.id, paramId(req.params.id));
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.post(
   "/:id/complete",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {

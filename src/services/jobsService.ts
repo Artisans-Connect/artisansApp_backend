@@ -106,7 +106,12 @@ export async function cancelJob(userId: string, jobId: string) {
 
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .update({ status: JOB_STATUS.CANCELLED })
+    .update({
+      status: JOB_STATUS.CANCELLED,
+      cancelled_by: "client",
+      cancelled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", jobId)
     .select()
     .single();
@@ -119,6 +124,42 @@ export async function cancelJob(userId: string, jobId: string) {
     await notifyService.notifyJobCancelled(job.worker_id, jobId);
   }
 
+  return data;
+}
+
+export async function requestAnotherWorker(userId: string, jobId: string) {
+  const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+  if (job.client_id !== userId) throw appError(403, "Not allowed to reopen this job", "FORBIDDEN");
+  if (job.status !== JOB_STATUS.CANCELLED || job.cancelled_by !== "worker") {
+    throw appError(409, "You can request another worker only after the assigned worker cancels", "INVALID_JOB_STATE");
+  }
+
+  const expiresAt =
+    job.job_mode === JOB_MODE.ASAP
+      ? new Date(Date.now() + MATCHING.JOB_EXPIRES_MINUTES * 60 * 1000).toISOString()
+      : job.expires_at;
+
+  matchingService.clearDispatchState(jobId);
+
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .update({
+      status: JOB_STATUS.MATCHING,
+      worker_id: null,
+      cancelled_by: null,
+      cancelled_reason: null,
+      cancelled_at: null,
+      expires_at: expiresAt,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "JOB_REOPEN_FAILED");
+
+  void matchingService.findAndDispatch(jobId, 1);
   return data;
 }
 
@@ -187,7 +228,7 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
 export async function getMyJobs(userId: string, statusFilter?: string[]) {
   let query = supabaseAdmin
     .from("jobs")
-    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
+    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
     .eq("client_id", userId)
     .order("created_at", { ascending: false });
 

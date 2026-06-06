@@ -207,6 +207,16 @@ export async function markDispatchAccepted(jobId: string, workerId: string): Pro
   if (error) logger(`dispatch accept warning: ${error.message}`);
 }
 
+export async function markWorkerCancelledDispatch(jobId: string, workerId: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("job_dispatches")
+    .update({ status: "declined", responded_at: new Date().toISOString() })
+    .eq("job_id", jobId)
+    .eq("worker_id", workerId)
+    .in("status", ["sent", "seen", "accepted"]);
+  if (error) logger(`dispatch worker-cancel warning: ${error.message}`);
+}
+
 export async function expireJob(jobId: string): Promise<void> {
   const job = await fetchJob(jobId);
   if (!job) return;
