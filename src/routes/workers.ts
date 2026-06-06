@@ -70,6 +70,15 @@ router.get(
 );
 
 router.get(
+  "/me/stats",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const stats = await workersService.getStats(req.user!.id);
+    res.status(200).json({ success: true, data: stats });
+  }),
+);
+
+router.get(
   "/me/job-requests",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {

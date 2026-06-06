@@ -90,7 +90,7 @@ async function readWorkerContext(workerId: string) {
   };
 }
 
-async function workerIdFromHandoff(code: string): Promise<string> {
+async function workerIdFromHandoff(code: string, allowConsumed = false): Promise<string> {
   const { data, error } = await supabaseAdmin
     .from("verification_handoffs")
     .select("id, worker_id, expires_at, consumed_at")
@@ -99,7 +99,7 @@ async function workerIdFromHandoff(code: string): Promise<string> {
 
   if (error) throw appError(500, error.message, "HANDOFF_FETCH_FAILED");
   if (!data) throw appError(401, "Invalid verification handoff", "HANDOFF_INVALID");
-  if (data.consumed_at) throw appError(401, "Verification handoff already used", "HANDOFF_USED");
+  if (!allowConsumed && data.consumed_at) throw appError(401, "Verification handoff already used", "HANDOFF_USED");
   if (new Date(data.expires_at).getTime() < Date.now()) {
     throw appError(401, "Verification handoff expired", "HANDOFF_EXPIRED");
   }
@@ -224,7 +224,7 @@ export async function uploadApplicationDocuments(userId: string | null, body: un
   }
 
   const input = parsed.data;
-  const workerId = userId ?? (input.handoff_code ? await workerIdFromHandoff(input.handoff_code) : null);
+  const workerId = userId ?? (input.handoff_code ? await workerIdFromHandoff(input.handoff_code, true) : null);
   if (!workerId) throw appError(401, "Sign in or open verification from the app", "UNAUTHORIZED");
 
   await ensureWorker(workerId);

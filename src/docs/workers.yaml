@@ -234,6 +234,50 @@ paths:
                   data:
                     type: object
                     nullable: true
+  /api/workers/me/stats:
+    get:
+      summary: Fetch live worker performance stats
+      tags:
+        - Workers
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Worker stats and recent reviews
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      total_jobs:
+                        type: integer
+                        example: 12
+                      rating:
+                        type: number
+                        example: 4.8
+                      review_count:
+                        type: integer
+                        example: 6
+                      response_hours_label:
+                        type: string
+                        example: "18 min"
+                      response_minutes_average:
+                        type: number
+                        nullable: true
+                        example: 18.4
+                      response_sample_count:
+                        type: integer
+                        example: 7
+                      recent_reviews:
+                        type: array
+                        items:
+                          type: object
   /api/workers/me/job-requests:
     get:
       summary: Get list of active job requests dispatched to this worker

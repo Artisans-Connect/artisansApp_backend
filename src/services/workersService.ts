@@ -21,6 +21,17 @@ const ACTIVE_WORKER_JOB_STATUSES = [
   JOB_STATUS.IN_PROGRESS,
 ];
 
+type WorkerStatsReview = {
+  id: string;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+  reviewer?: {
+    full_name?: string | null;
+    avatar_url?: string | null;
+  } | null;
+};
+
 export async function updateLocation(userId: string, body: unknown) {
   const parsed = updateLocationSchema.safeParse(body);
   if (!parsed.success) {
@@ -336,6 +347,71 @@ export async function getJobRequests(userId: string) {
   return data ?? [];
 }
 
+export async function getStats(userId: string) {
+  const { data: worker, error: workerError } = await supabaseAdmin
+    .from("workers")
+    .select("id, rating, total_jobs")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (workerError) throw appError(500, workerError.message, "WORKER_STATS_FETCH_FAILED");
+  if (!worker) throw appError(404, "Worker profile not found", "WORKER_NOT_FOUND");
+
+  const { count: completedJobs, error: completedError } = await supabaseAdmin
+    .from("jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("worker_id", userId)
+    .eq("status", JOB_STATUS.COMPLETED);
+
+  if (completedError) throw appError(500, completedError.message, "WORKER_STATS_FETCH_FAILED");
+
+  const { count: reviewCount, error: reviewCountError } = await supabaseAdmin
+    .from("reviews")
+    .select("id", { count: "exact", head: true })
+    .eq("worker_id", userId);
+
+  if (reviewCountError) throw appError(500, reviewCountError.message, "WORKER_STATS_FETCH_FAILED");
+
+  const { data: reviews, error: reviewsError } = await supabaseAdmin
+    .from("reviews")
+    .select("id, rating, comment, created_at, reviewer:profiles!reviews_reviewer_id_fkey(full_name, avatar_url)")
+    .eq("worker_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(3);
+
+  if (reviewsError) throw appError(500, reviewsError.message, "WORKER_STATS_FETCH_FAILED");
+
+  const { data: acceptedDispatches, error: dispatchError } = await supabaseAdmin
+    .from("job_dispatches")
+    .select("created_at, responded_at")
+    .eq("worker_id", userId)
+    .eq("status", "accepted")
+    .not("responded_at", "is", null)
+    .order("responded_at", { ascending: false })
+    .limit(25);
+
+  if (dispatchError) throw appError(500, dispatchError.message, "WORKER_STATS_FETCH_FAILED");
+
+  const responseStats = responseTimeStats(acceptedDispatches ?? []);
+
+  return {
+    total_jobs: completedJobs ?? worker.total_jobs ?? 0,
+    rating: Number(worker.rating ?? 0),
+    review_count: reviewCount ?? 0,
+    response_hours_label: responseStats.label,
+    response_minutes_average: responseStats.averageMinutes,
+    response_sample_count: responseStats.sampleCount,
+    recent_reviews: ((reviews ?? []) as WorkerStatsReview[]).map((review) => ({
+      id: review.id,
+      rating: review.rating,
+      comment: review.comment,
+      created_at: review.created_at,
+      reviewer_name: review.reviewer?.full_name ?? "Client",
+      reviewer_avatar_url: review.reviewer?.avatar_url ?? null,
+    })),
+  };
+}
+
 export async function getJobRequestById(userId: string, jobId: string) {
   await matchingService.expireTimedOutDispatches(jobId);
 
@@ -372,6 +448,38 @@ export async function getJobRequestById(userId: string, jobId: string) {
   if (error) throw appError(500, error.message, "JOB_FETCH_FAILED");
   if (!data) throw appError(409, "Job is no longer available", "JOB_NOT_AVAILABLE");
   return data;
+}
+
+function responseTimeStats(dispatches: Array<{ created_at: string | null; responded_at: string | null }>) {
+  if (dispatches.length === 0) {
+    return { label: "--", averageMinutes: null, sampleCount: 0 };
+  }
+
+  const minuteValues = dispatches
+    .map((dispatch) => {
+      const sentAt = dispatch.created_at ? Date.parse(dispatch.created_at) : NaN;
+      const respondedAt = dispatch.responded_at ? Date.parse(dispatch.responded_at) : NaN;
+      if (!Number.isFinite(sentAt) || !Number.isFinite(respondedAt)) return null;
+      return Math.max(0, (respondedAt - sentAt) / (1000 * 60));
+    })
+    .filter((value): value is number => value != null);
+
+  if (minuteValues.length === 0) {
+    return { label: "--", averageMinutes: null, sampleCount: 0 };
+  }
+
+  const average = minuteValues.reduce((sum, value) => sum + value, 0) / minuteValues.length;
+  if (average < 1) {
+    return { label: "<1 min", averageMinutes: average, sampleCount: minuteValues.length };
+  }
+  if (average < 60) {
+    return { label: `${Math.round(average)} min`, averageMinutes: average, sampleCount: minuteValues.length };
+  }
+  return {
+    label: `${(average / 60).toFixed(1)} hrs`,
+    averageMinutes: average,
+    sampleCount: minuteValues.length,
+  };
 }
 
 function scoreNearbyWorker(worker: any, radiusKm: number): number {
