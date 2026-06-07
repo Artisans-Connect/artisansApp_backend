@@ -55,6 +55,31 @@ const statusSchema = z.object({
 
 type VerificationStatus = z.infer<typeof statusSchema>["status"];
 
+type ApplicationListFilters = {
+  status?: string;
+  limit?: number;
+};
+
+function applicationNumberCandidates(value: string): string[] {
+  const trimmed = value.trim().toUpperCase();
+  const noSpaces = trimmed.replace(/\s+/g, "");
+  const compact = noSpaces.replace(/[^A-Z0-9]/g, "");
+  const candidates = new Set<string>();
+
+  if (trimmed) candidates.add(trimmed);
+  if (noSpaces) candidates.add(noSpaces);
+  if (compact) candidates.add(compact);
+  if (compact.startsWith("ART") && compact.length > 3) {
+    candidates.add(`ART-${compact.slice(3)}`);
+  }
+
+  return Array.from(candidates);
+}
+
+function normalizePhone(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
 function hashCode(code: string): string {
   return crypto.createHash("sha256").update(code).digest("hex");
 }
@@ -137,6 +162,146 @@ export async function getMine(userId: string) {
   return readWorkerContext(userId);
 }
 
+export async function findApplication(applicationNumber?: string, phoneNumber?: string) {
+  if (applicationNumber?.trim()) {
+    const candidates = applicationNumberCandidates(applicationNumber);
+    const { data, error } = await supabaseAdmin
+      .from("worker_verifications")
+      .select("*")
+      .in("application_number", candidates)
+      .order("submitted_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw appError(500, error.message, "VERIFICATION_SEARCH_FAILED");
+    return data?.[0] ?? null;
+  }
+
+  if (phoneNumber?.trim()) {
+    const rawPhone = phoneNumber.trim();
+    const phoneDigits = normalizePhone(rawPhone);
+    if (!phoneDigits) {
+      const { data, error } = await supabaseAdmin
+        .from("worker_verifications")
+        .select("*")
+        .ilike("phone_number", `%${rawPhone}%`)
+        .order("submitted_at", { ascending: false })
+        .limit(1);
+
+      if (error) throw appError(500, error.message, "VERIFICATION_SEARCH_FAILED");
+      return data?.[0] ?? null;
+    }
+
+    const searchTerms = Array.from(
+      new Set([rawPhone, phoneDigits, phoneDigits.length >= 6 ? phoneDigits.slice(-6) : ""]),
+    ).filter(Boolean);
+
+    for (const term of searchTerms) {
+      const { data, error } = await supabaseAdmin
+        .from("worker_verifications")
+        .select("*")
+        .ilike("phone_number", `%${term}%`)
+        .order("submitted_at", { ascending: false })
+        .limit(20);
+
+      if (error) throw appError(500, error.message, "VERIFICATION_SEARCH_FAILED");
+      const match = (data ?? []).find((row) => {
+        const storedDigits = normalizePhone(String(row.phone_number ?? ""));
+        if (!storedDigits) return false;
+        return storedDigits === phoneDigits || storedDigits.endsWith(phoneDigits) || phoneDigits.endsWith(storedDigits);
+      });
+      if (match) return match;
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("worker_verifications")
+      .select("*")
+      .order("submitted_at", { ascending: false })
+      .limit(500);
+
+    if (error) throw appError(500, error.message, "VERIFICATION_SEARCH_FAILED");
+    return (
+      (data ?? []).find((row) => {
+        const storedDigits = normalizePhone(String(row.phone_number ?? ""));
+        if (!storedDigits) return false;
+        return storedDigits === phoneDigits || storedDigits.endsWith(phoneDigits) || phoneDigits.endsWith(storedDigits);
+      }) ?? null
+    );
+  }
+
+  throw appError(400, "Application number or phone number is required", "VALIDATION_ERROR");
+}
+
+export async function listApplications(filters: ApplicationListFilters = {}) {
+  let query = supabaseAdmin
+    .from("worker_verifications")
+    .select("*")
+    .order("submitted_at", { ascending: false });
+
+  if (filters.status && filters.status !== "all") {
+    query = query.eq("status", filters.status);
+  }
+
+  query = query.limit(Math.min(Math.max(filters.limit ?? 500, 1), 1000));
+
+  const { data, error } = await query;
+  if (error) throw appError(500, error.message, "VERIFICATION_LIST_FAILED");
+  return data ?? [];
+}
+
+export async function getApplicationBundle(verificationId: string) {
+  const [applicationResult, refsResult, docsResult, logsResult] = await Promise.all([
+    supabaseAdmin.from("worker_verifications").select("*").eq("id", verificationId).maybeSingle(),
+    supabaseAdmin.from("verification_references").select("*").eq("verification_id", verificationId),
+    supabaseAdmin.from("verification_documents").select("*").eq("verification_id", verificationId).order("uploaded_at"),
+    supabaseAdmin
+      .from("verification_audit_logs")
+      .select("*")
+      .eq("verification_id", verificationId)
+      .order("created_at", { ascending: false }),
+  ]);
+
+  if (applicationResult.error) {
+    throw appError(500, applicationResult.error.message, "VERIFICATION_FETCH_FAILED");
+  }
+  if (!applicationResult.data) {
+    throw appError(404, "Verification application not found", "VERIFICATION_NOT_FOUND");
+  }
+  if (refsResult.error) throw appError(500, refsResult.error.message, "REFERENCES_FETCH_FAILED");
+  if (docsResult.error) throw appError(500, docsResult.error.message, "DOCUMENTS_FETCH_FAILED");
+  if (logsResult.error) throw appError(500, logsResult.error.message, "AUDIT_LOGS_FETCH_FAILED");
+
+  const documents = await Promise.all(
+    (docsResult.data ?? []).map(async (doc) => {
+      if (!doc.storage_path) return doc;
+      const { data } = await supabaseAdmin.storage
+        .from("verification-docs")
+        .createSignedUrl(doc.storage_path, 60 * 60);
+      return {
+        ...doc,
+        file_url: data?.signedUrl ?? doc.file_url,
+      };
+    }),
+  );
+
+  return {
+    application: applicationResult.data,
+    references: refsResult.data ?? [],
+    documents,
+    audit_logs: logsResult.data ?? [],
+  };
+}
+
+export async function listAuditLogs(limit = 100) {
+  const { data, error } = await supabaseAdmin
+    .from("verification_audit_logs")
+    .select("*, worker_verifications(full_name, application_number)")
+    .order("created_at", { ascending: false })
+    .limit(Math.min(Math.max(limit, 1), 500));
+
+  if (error) throw appError(500, error.message, "AUDIT_LOGS_FETCH_FAILED");
+  return data ?? [];
+}
+
 export async function submitApplication(userId: string | null, body: unknown) {
   const parsed = applicationSchema.safeParse(body);
   if (!parsed.success) {
@@ -178,6 +343,10 @@ export async function submitApplication(userId: string | null, body: unknown) {
     confidence_score: input.confidence_score,
     fraud_indicators: input.fraud_indicators,
     submitted_at: new Date().toISOString(),
+    reviewed_at: null,
+    rejection_reason: "",
+    admin_notes: "",
+    more_info_message: "",
     updated_at: new Date().toISOString(),
   };
 
@@ -188,8 +357,11 @@ export async function submitApplication(userId: string | null, body: unknown) {
   const { data: verification, error } = await query;
   if (error) throw appError(500, error.message, "VERIFICATION_SUBMIT_FAILED");
 
-  if (input.references.length > 0) {
+  if (existing || input.references.length > 0) {
     await supabaseAdmin.from("verification_references").delete().eq("verification_id", verification.id);
+  }
+
+  if (input.references.length > 0) {
     const { error: referencesError } = await supabaseAdmin.from("verification_references").insert(
       input.references.map((reference) => ({
         ...reference,
@@ -204,7 +376,7 @@ export async function submitApplication(userId: string | null, body: unknown) {
     verification_id: verification.id,
     worker_id: workerId,
     action: "submitted",
-    notes: "Application submitted by worker",
+    notes: existing ? "Application resubmitted by worker" : "Application submitted by worker",
   });
 
   if (input.handoff_code) {
@@ -380,6 +552,47 @@ export async function setApplicationStatus(adminUserId: string, verificationId: 
     worker_id: data.worker_id,
     admin_id: adminUserId,
     admin_name: admin.full_name,
+    action: input.status === "under_review" ? "reviewed" : input.status,
+    notes: input.rejection_reason || input.more_info_message || input.admin_notes || `Application ${input.status}`,
+  });
+
+  if (input.status === "approved") {
+    await syncApprovedVerificationToAccount(data);
+  }
+
+  return data;
+}
+
+export async function setApplicationStatusByPortalAdmin(verificationId: string, body: unknown) {
+  const parsed = statusSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid verification status", "VALIDATION_ERROR");
+  }
+
+  const input = parsed.data;
+  const patch: Record<string, unknown> = {
+    status: input.status,
+    reviewed_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (input.verification_level) patch.verification_level = input.verification_level;
+  if (input.rejection_reason) patch.rejection_reason = input.rejection_reason;
+  if (input.admin_notes) patch.admin_notes = input.admin_notes;
+  if (input.more_info_message) patch.more_info_message = input.more_info_message;
+
+  const { data, error } = await supabaseAdmin
+    .from("worker_verifications")
+    .update(patch)
+    .eq("id", verificationId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "VERIFICATION_STATUS_FAILED");
+
+  await supabaseAdmin.from("verification_audit_logs").insert({
+    verification_id: verificationId,
+    worker_id: data.worker_id,
+    admin_name: "Portal Admin",
     action: input.status === "under_review" ? "reviewed" : input.status,
     notes: input.rejection_reason || input.more_info_message || input.admin_notes || `Application ${input.status}`,
   });

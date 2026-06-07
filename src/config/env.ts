@@ -9,6 +9,7 @@ const envSchema = z
     PORT: z.coerce.number().int().positive().default(3000),
     SUPABASE_URL: z.url(),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+    VERIFICATION_ADMIN_KEY: z.string().min(8).optional(),
     FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1).optional(),
     FIREBASE_SERVICE_ACCOUNT_BASE64: z.string().min(1).optional(),
   })
