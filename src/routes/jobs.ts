@@ -63,6 +63,24 @@ router.post(
   }),
 );
 
+router.post(
+  "/:id/approve-completion",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await jobsService.approveCompletion(req.user!.id, paramId(req.params.id));
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.post(
+  "/:id/reopen",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await jobsService.reopenJob(req.user!.id, paramId(req.params.id), req.body ?? {});
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
 router.get(
   "/:id",
   authMiddleware,

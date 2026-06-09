@@ -127,6 +127,14 @@ export async function notifyJobCompleted(clientId: string): Promise<void> {
   });
 }
 
+export async function notifyCompletionSubmitted(clientId: string): Promise<void> {
+  await sendToUser(clientId, {
+    title: "Work submitted for approval",
+    body: "Review the completed work and approve it when you are satisfied",
+    data: { type: "job_completion_submitted" },
+  });
+}
+
 export async function notifyScheduledReminder(clientId: string, workerName: string): Promise<void> {
   await sendToUser(clientId, {
     title: "Upcoming job reminder",

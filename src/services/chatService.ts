@@ -50,16 +50,27 @@ export async function createDirectConversation(userId: string, body: unknown) {
     .maybeSingle();
   if (!worker) throw appError(404, "Worker not found", "WORKER_NOT_FOUND");
 
+  // Prevent duplicates by checking first (in case unique constraint is missing)
+  const { data: existingList } = await supabaseAdmin
+    .from("direct_conversations")
+    .select(
+      "id, client_id, worker_id, updated_at, worker:profiles!direct_conversations_worker_id_fkey(full_name, avatar_url)",
+    )
+    .eq("client_id", userId)
+    .eq("worker_id", workerId)
+    .limit(1);
+
+  if (existingList && existingList.length > 0) {
+    return existingList[0];
+  }
+
   const { data, error } = await supabaseAdmin
     .from("direct_conversations")
-    .upsert(
-      {
-        client_id: userId,
-        worker_id: workerId,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "client_id,worker_id" },
-    )
+    .insert({
+      client_id: userId,
+      worker_id: workerId,
+      updated_at: new Date().toISOString(),
+    })
     .select(
       "id, client_id, worker_id, updated_at, worker:profiles!direct_conversations_worker_id_fkey(full_name, avatar_url)",
     )
@@ -174,7 +185,38 @@ export async function listConversations(userId: string) {
     };
   });
 
-  return [...jobConversations, ...direct].sort(
+  // Deduplicate direct conversations by counterpart_id
+  const uniqueDirect = new Map<string, typeof direct[0]>();
+  for (const c of direct) {
+    if (!uniqueDirect.has(c.counterpart_id)) {
+      uniqueDirect.set(c.counterpart_id, c);
+    } else {
+      const existing = uniqueDirect.get(c.counterpart_id)!;
+      if (new Date(c.last_message_at).getTime() > new Date(existing.last_message_at).getTime()) {
+        uniqueDirect.set(c.counterpart_id, c);
+      }
+    }
+  }
+
+  // Also deduplicate jobs by counterpart_id? 
+  // We'll leave jobs as-is, but if a job chat and a direct chat exist, we might want to keep both,
+  // or group by counterpart overall. Let's group EVERYTHING by counterpart_id to ensure a clean UI.
+  // In most chat apps, there's only 1 conversation tile per user. 
+  // Tapping it opens the latest thread (job or direct).
+  const allConversations = [...jobConversations, ...Array.from(uniqueDirect.values())];
+  const uniqueConversations = new Map<string, typeof allConversations[0]>();
+  for (const c of allConversations) {
+    if (!uniqueConversations.has(c.counterpart_id)) {
+      uniqueConversations.set(c.counterpart_id, c);
+    } else {
+      const existing = uniqueConversations.get(c.counterpart_id)!;
+      if (new Date(c.last_message_at).getTime() > new Date(existing.last_message_at).getTime()) {
+        uniqueConversations.set(c.counterpart_id, c);
+      }
+    }
+  }
+
+  return Array.from(uniqueConversations.values()).sort(
     (a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime(),
   );
 }

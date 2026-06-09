@@ -6,6 +6,7 @@ export const JOB_STATUS = {
   ON_THE_WAY: "on_the_way",
   ARRIVED: "arrived",
   IN_PROGRESS: "in_progress",
+  PENDING_CLIENT_APPROVAL: "pending_client_approval",
   COMPLETED: "completed",
   CANCELLED: "cancelled",
   EXPIRED: "expired",

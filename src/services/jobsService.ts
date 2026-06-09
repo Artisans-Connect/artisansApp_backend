@@ -176,43 +176,42 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
   const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
 
-  const isParticipant = job.client_id === userId || job.worker_id === userId;
-  if (!isParticipant) throw appError(403, "Not allowed to complete this job", "FORBIDDEN");
+  if (job.worker_id !== userId) {
+    throw appError(403, "Only the assigned worker can submit completion", "FORBIDDEN");
+  }
   if (job.status !== JOB_STATUS.IN_PROGRESS) {
     throw appError(409, "Job must be in progress before completion", "INVALID_JOB_STATE");
   }
 
-  if (job.worker_id) {
-    const input = parsed.data;
-    const hasCompletionDetails =
-      input.hours_spent != null ||
-      Boolean(input.materials_used) ||
-      Boolean(input.notes) ||
-      input.photo_urls.length > 0;
+  const input = parsed.data;
+  const hasCompletionDetails =
+    input.hours_spent != null ||
+    Boolean(input.materials_used) ||
+    Boolean(input.notes) ||
+    input.photo_urls.length > 0;
 
-    if (hasCompletionDetails) {
-      if (userId !== job.worker_id) {
-        throw appError(403, "Only the assigned worker can submit completion details", "FORBIDDEN");
-      }
-      const { error: detailsError } = await supabaseAdmin.from("job_completion_details").upsert(
-        {
-          job_id: jobId,
-          worker_id: job.worker_id,
-          hours_spent: input.hours_spent ?? null,
-          materials_used: input.materials_used ?? null,
-          notes: input.notes ?? null,
-          photo_urls: input.photo_urls,
-        },
-        { onConflict: "job_id" },
-      );
+  if (hasCompletionDetails) {
+    const { error: detailsError } = await supabaseAdmin.from("job_completion_details").upsert(
+      {
+        job_id: jobId,
+        worker_id: job.worker_id,
+        hours_spent: input.hours_spent ?? null,
+        materials_used: input.materials_used ?? null,
+        notes: input.notes ?? null,
+        photo_urls: input.photo_urls,
+      },
+      { onConflict: "job_id" },
+    );
 
-      if (detailsError) throw appError(500, detailsError.message, "JOB_COMPLETION_DETAILS_FAILED");
-    }
+    if (detailsError) throw appError(500, detailsError.message, "JOB_COMPLETION_DETAILS_FAILED");
   }
 
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .update({ status: JOB_STATUS.COMPLETED })
+    .update({
+      status: JOB_STATUS.PENDING_CLIENT_APPROVAL,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", jobId)
     .select()
     .single();
@@ -220,8 +219,65 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
   if (error) throw appError(500, error.message, "JOB_COMPLETE_FAILED");
 
   matchingService.clearDispatchState(jobId);
-  await notifyService.notifyJobCompleted(job.client_id);
+  await notifyService.notifyCompletionSubmitted(job.client_id);
 
+  return data;
+}
+
+export async function approveCompletion(userId: string, jobId: string) {
+  const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+  if (job.client_id !== userId) throw appError(403, "Only the client can approve completion", "FORBIDDEN");
+  if (job.status !== JOB_STATUS.PENDING_CLIENT_APPROVAL && job.status !== JOB_STATUS.COMPLETED) {
+    throw appError(409, "Job is not waiting for client approval", "INVALID_JOB_STATE");
+  }
+  if (job.status === JOB_STATUS.COMPLETED) return job;
+
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .update({ status: JOB_STATUS.COMPLETED, updated_at: new Date().toISOString() })
+    .eq("id", jobId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "JOB_APPROVE_COMPLETION_FAILED");
+  matchingService.clearDispatchState(jobId);
+  return data;
+}
+
+export async function reopenJob(userId: string, jobId: string, body: unknown) {
+  const note =
+    typeof body === "object" && body !== null && "note" in body
+      ? String((body as { note?: unknown }).note ?? "").trim()
+      : "";
+  if (note.length > 1000) throw appError(400, "Reopen note must be 1000 characters or fewer", "VALIDATION_ERROR");
+
+  const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+  if (job.client_id !== userId) throw appError(403, "Only the client can reopen this job", "FORBIDDEN");
+  if (job.status !== JOB_STATUS.PENDING_CLIENT_APPROVAL) {
+    throw appError(409, "Only jobs waiting for client approval can be reopened", "INVALID_JOB_STATE");
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .update({
+      status: JOB_STATUS.IN_PROGRESS,
+      completion_dispute_note: note || "Client reported the job is not complete.",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "JOB_REOPEN_FAILED");
+  if (job.worker_id) {
+    await notifyService.notifyWorkerNewJob(job.worker_id, {
+      id: job.id,
+      title: job.title,
+      address_label: job.address_label,
+    });
+  }
   return data;
 }
 

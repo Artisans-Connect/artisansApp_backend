@@ -10,7 +10,7 @@ export async function createReview(userId: string, body: unknown) {
 
   const input = parsed.data;
 
-  // Verify: job exists, is completed, and user is the client
+  // Verify: job exists, is ready for client approval, and user is the client
   const { data: job } = await supabaseAdmin
     .from("jobs")
     .select("id, client_id, worker_id, status")
@@ -18,9 +18,19 @@ export async function createReview(userId: string, body: unknown) {
     .maybeSingle();
 
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
-  if (job.status !== "completed") throw appError(400, "Can only review completed jobs", "JOB_NOT_COMPLETED");
+  if (job.status !== "completed" && job.status !== "pending_client_approval") {
+    throw appError(400, "Can only review jobs awaiting approval or completed jobs", "JOB_NOT_COMPLETED");
+  }
   if (job.client_id !== userId) throw appError(403, "Only the client can review", "FORBIDDEN");
   if (job.worker_id !== input.worker_id) throw appError(400, "Worker ID does not match the job", "WORKER_MISMATCH");
+
+  if (job.status === "pending_client_approval") {
+    const { error: jobError } = await supabaseAdmin
+      .from("jobs")
+      .update({ status: "completed", updated_at: new Date().toISOString() })
+      .eq("id", input.job_id);
+    if (jobError) throw appError(500, jobError.message, "JOB_APPROVE_COMPLETION_FAILED");
+  }
 
   const { data, error } = await supabaseAdmin
     .from("reviews")
