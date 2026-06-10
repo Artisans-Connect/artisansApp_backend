@@ -1,6 +1,6 @@
 openapi: 3.0.0
 info:
-  title: Artisans Chat API
+  title: CraftMatch Chat API
   version: 1.0.0
 paths:
   /api/chat:

@@ -1,6 +1,6 @@
-# Artisans Platform Backend
+# CraftMatch Platform Backend
 
-This is the Node.js Express.js backend for the Artisans platform. It coordinates job matching, real-time updates, and push notifications between clients and workers.
+This is the Node.js Express.js backend for the CraftMatch platform. It coordinates job matching, real-time updates, and push notifications between clients and workers.
 
 ## Tech Stack
 
