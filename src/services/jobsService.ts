@@ -1,9 +1,11 @@
 import { supabaseAdmin } from "../config/supabase";
-import { JOB_MODE, JOB_STATUS, MATCHING } from "../constants/enums";
+import { JOB_MODE, JOB_STATUS, MATCHING, CANCELLATION_STAGE, CANCELLATION_FEES } from "../constants/enums";
 import { appError } from "../utils/appError";
+import { haversineKm } from "../utils/haversine";
 import { completeJobSchema, createJobSchema, initialJobStatus } from "../validators/jobs.validator";
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
+
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -99,17 +101,188 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
   return data;
 }
 
-export async function cancelJob(userId: string, jobId: string) {
+/* ── Cancellation helpers ──────────────────────────────────── */
+
+function determineCancellationStage(jobStatus: string, jobUpdatedAt: string | null) {
+  switch (jobStatus) {
+    case JOB_STATUS.DRAFT:
+    case JOB_STATUS.SEARCHING:
+    case JOB_STATUS.MATCHING:
+      return { stage: CANCELLATION_STAGE.FREE, canCancel: true };
+    case JOB_STATUS.MATCHED: {
+      // Grace period: if job was matched less than 2 minutes ago, it's free
+      if (jobUpdatedAt) {
+        const elapsed = Date.now() - new Date(jobUpdatedAt).getTime();
+        if (elapsed < CANCELLATION_FEES.GRACE_PERIOD_MS) {
+          return { stage: CANCELLATION_STAGE.FREE, canCancel: true };
+        }
+      }
+      return { stage: CANCELLATION_STAGE.WARNING, canCancel: true };
+    }
+    case JOB_STATUS.ON_THE_WAY:
+      return { stage: CANCELLATION_STAGE.TRAVEL_COMPENSATION, canCancel: true };
+    case JOB_STATUS.ARRIVED:
+      return { stage: CANCELLATION_STAGE.SIGNIFICANT_FEE, canCancel: true };
+    case JOB_STATUS.IN_PROGRESS:
+    case JOB_STATUS.TERMINATION_REQUESTED:
+      return { stage: CANCELLATION_STAGE.TERMINATION_REQUESTED, canCancel: false };
+    default:
+      return { stage: null, canCancel: false };
+  }
+}
+
+async function getWorkerLocation(workerId: string) {
+  const { data } = await supabaseAdmin
+    .from("workers")
+    .select("current_lat, current_lng")
+    .eq("id", workerId)
+    .maybeSingle();
+  return data;
+}
+
+async function getCategoryBaseFee(categoryId: string): Promise<number> {
+  const { data } = await supabaseAdmin
+    .from("categories")
+    .select("base_fee")
+    .eq("id", categoryId)
+    .maybeSingle();
+  return data?.base_fee ? Number(data.base_fee) : 80;
+}
+
+async function computeCancellationFee(
+  job: any,
+  stage: string,
+): Promise<{ amount: number; reason: string; distanceKm?: number }> {
+  if (stage === CANCELLATION_STAGE.FREE || stage === CANCELLATION_STAGE.WARNING) {
+    return {
+      amount: 0,
+      reason: stage === CANCELLATION_STAGE.WARNING ? "Warning issued — no charge" : "Free cancellation",
+    };
+  }
+
+  if (stage === CANCELLATION_STAGE.TRAVEL_COMPENSATION && job.worker_id) {
+    const worker = await getWorkerLocation(job.worker_id);
+    if (worker?.current_lat != null && worker?.current_lng != null && job.location_lat != null && job.location_lng != null) {
+      const distanceKm = haversineKm(
+        Number(worker.current_lat),
+        Number(worker.current_lng),
+        Number(job.location_lat),
+        Number(job.location_lng),
+      );
+      const fee = Math.round(distanceKm * CANCELLATION_FEES.TRAVEL_RATE_PER_KM);
+      return {
+        amount: Math.max(fee, 0),
+        reason: `Travel compensation: ${distanceKm.toFixed(1)} km × GH₵ ${CANCELLATION_FEES.TRAVEL_RATE_PER_KM}/km`,
+        distanceKm,
+      };
+    }
+    return { amount: 0, reason: "Travel compensation (distance unavailable)" };
+  }
+
+  if (stage === CANCELLATION_STAGE.SIGNIFICANT_FEE) {
+    const baseFee = await getCategoryBaseFee(job.category_id);
+    const fee = Math.round(baseFee * CANCELLATION_FEES.ARRIVED_FEE_PERCENT);
+    const clampedFee = Math.min(
+      Math.max(fee, CANCELLATION_FEES.ARRIVED_FEE_MINIMUM),
+      CANCELLATION_FEES.ARRIVED_FEE_MAXIMUM,
+    );
+    return {
+      amount: clampedFee,
+      reason: `Cancellation fee: ${Math.round(CANCELLATION_FEES.ARRIVED_FEE_PERCENT * 100)}% of GH₵ ${baseFee} base fee`,
+    };
+  }
+
+  return { amount: 0, reason: "No fee" };
+}
+
+async function recordCancellation(
+  jobId: string,
+  cancelledBy: string,
+  stage: string,
+  statusAtCancel: string,
+  feeAmount: number,
+  feeReason: string,
+  reason?: string,
+  distanceKm?: number,
+) {
+  await supabaseAdmin.from("job_cancellations").insert({
+    job_id: jobId,
+    cancelled_by: cancelledBy,
+    cancellation_stage: stage,
+    job_status_at_cancel: statusAtCancel,
+    fee_amount: feeAmount,
+    fee_reason: feeReason,
+    worker_distance_km: distanceKm ?? null,
+    reason: reason || null,
+  });
+}
+
+async function incrementClientCancelCount(clientId: string) {
+  const { data: profile } = await supabaseAdmin
+    .from("profiles")
+    .select("client_cancel_count, client_cancel_reset_at")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  const resetAt = profile?.client_cancel_reset_at ? new Date(profile.client_cancel_reset_at) : null;
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  if (!resetAt || resetAt < thirtyDaysAgo) {
+    await supabaseAdmin
+      .from("profiles")
+      .update({ client_cancel_count: 1, client_cancel_reset_at: new Date().toISOString() })
+      .eq("id", clientId);
+  } else {
+    const newCount = (profile?.client_cancel_count ?? 0) + 1;
+    await supabaseAdmin
+      .from("profiles")
+      .update({ client_cancel_count: newCount })
+      .eq("id", clientId);
+  }
+}
+
+/* ── Cancel / Preview / Termination ───────────────────────── */
+
+export async function cancelJob(userId: string, jobId: string, body: unknown) {
+  const reason =
+    body && typeof body === "object" && "reason" in body
+      ? String((body as { reason?: unknown }).reason ?? "").trim()
+      : "";
+
   const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
   if (job.client_id !== userId) throw appError(403, "Not allowed to cancel this job", "FORBIDDEN");
 
+  // Determine cancellation stage
+  const { stage, canCancel } = determineCancellationStage(job.status, job.updated_at);
+
+  if (!canCancel) {
+    throw appError(
+      409,
+      job.status === JOB_STATUS.IN_PROGRESS || job.status === JOB_STATUS.TERMINATION_REQUESTED
+        ? "Cannot cancel a job in progress. Use the termination request instead."
+        : "This job cannot be cancelled in its current state.",
+      "INVALID_JOB_STATE",
+    );
+  }
+
+  if (!stage) {
+    throw appError(409, "This job cannot be cancelled in its current state.", "INVALID_JOB_STATE");
+  }
+
+  // Compute fee
+  const feeResult = await computeCancellationFee(job, stage);
+
+  // Update job
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .update({
       status: JOB_STATUS.CANCELLED,
       cancelled_by: "client",
+      cancelled_reason: reason || null,
       cancelled_at: new Date().toISOString(),
+      cancellation_stage: stage,
+      cancellation_fee: feeResult.amount,
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)
@@ -118,10 +291,131 @@ export async function cancelJob(userId: string, jobId: string) {
 
   if (error) throw appError(500, error.message, "JOB_CANCEL_FAILED");
 
+  // Record in ledger
+  await recordCancellation(
+    jobId,
+    "client",
+    stage,
+    job.status,
+    feeResult.amount,
+    feeResult.reason,
+    reason,
+    feeResult.distanceKm,
+  );
+
+  // Increment client cancel count
+  await incrementClientCancelCount(userId);
+
+  // Clear dispatch state
   matchingService.clearDispatchState(jobId);
 
+  // Notify worker
   if (job.worker_id) {
-    await notifyService.notifyJobCancelled(job.worker_id, jobId);
+    await notifyService.notifyClientCancelledWithFee(
+      job.worker_id,
+      jobId,
+      stage,
+      feeResult.amount,
+    );
+  }
+
+  return data;
+}
+
+export async function getCancellationPreview(userId: string, jobId: string) {
+  const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+  if (job.client_id !== userId) throw appError(403, "Not authorized", "FORBIDDEN");
+
+  const { stage, canCancel } = determineCancellationStage(job.status, job.updated_at);
+
+  if (!stage) {
+    return {
+      can_cancel: false,
+      stage: null,
+      fee_amount: 0,
+      fee_currency: "GHS",
+      fee_reason: "This job cannot be cancelled.",
+      warning_title: "Cannot Cancel",
+      warning_message: "This job cannot be cancelled in its current state.",
+    };
+  }
+
+  const feeResult = await computeCancellationFee(job, stage);
+
+  let warningTitle: string;
+  let warningMessage: string;
+
+  switch (stage) {
+    case CANCELLATION_STAGE.FREE:
+      warningTitle = "Cancel this job?";
+      warningMessage = "You can cancel this job for free.";
+      break;
+    case CANCELLATION_STAGE.WARNING:
+      warningTitle = "Cancel this job?";
+      warningMessage = "Your artisan has already accepted this job. Are you sure you want to cancel?";
+      break;
+    case CANCELLATION_STAGE.TRAVEL_COMPENSATION:
+      warningTitle = "Cancel this job?";
+      warningMessage = `Your artisan is on the way. A travel compensation of GH₵ ${feeResult.amount.toFixed(2)} will apply. Please pay this amount directly to the artisan.`;
+      break;
+    case CANCELLATION_STAGE.SIGNIFICANT_FEE:
+      warningTitle = "Cancel this job?";
+      warningMessage = `Your artisan has arrived. A cancellation fee of GH₵ ${feeResult.amount.toFixed(2)} will apply. Please pay this amount directly to the artisan.`;
+      break;
+    case CANCELLATION_STAGE.TERMINATION_REQUESTED:
+      warningTitle = "Request Termination";
+      warningMessage = "Work has already started. You can request a termination which will be reviewed.";
+      break;
+    default:
+      warningTitle = "Cancel this job?";
+      warningMessage = "Are you sure?";
+  }
+
+  return {
+    can_cancel: canCancel,
+    stage,
+    fee_amount: feeResult.amount,
+    fee_currency: "GHS",
+    fee_reason: feeResult.reason,
+    warning_title: warningTitle,
+    warning_message: warningMessage,
+  };
+}
+
+export async function requestTermination(userId: string, jobId: string, body: unknown) {
+  const reason =
+    body && typeof body === "object" && "reason" in body
+      ? String((body as { reason?: unknown }).reason ?? "").trim()
+      : "";
+
+  const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+  if (job.client_id !== userId) throw appError(403, "Not allowed", "FORBIDDEN");
+  if (job.status !== JOB_STATUS.IN_PROGRESS) {
+    throw appError(409, "Termination can only be requested for jobs in progress", "INVALID_JOB_STATE");
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .update({
+      status: JOB_STATUS.TERMINATION_REQUESTED,
+      cancelled_reason: reason || "Client requested termination",
+      cancellation_stage: CANCELLATION_STAGE.TERMINATION_REQUESTED,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "TERMINATION_REQUEST_FAILED");
+
+  if (job.worker_id) {
+    await notifyService.notifyTerminationRequested(
+      job.worker_id,
+      jobId,
+      reason || "The client has requested to terminate this job.",
+    );
   }
 
   return data;
@@ -284,7 +578,7 @@ export async function reopenJob(userId: string, jobId: string, body: unknown) {
 export async function getMyJobs(userId: string, statusFilter?: string[]) {
   let query = supabaseAdmin
     .from("jobs")
-    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
+    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, cancellation_stage, cancellation_fee, cancellation_fee_currency, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
     .eq("client_id", userId)
     .order("created_at", { ascending: false });
 

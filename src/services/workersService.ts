@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "../config/supabase";
 import { env } from "../config/env";
-import { JOB_STATUS } from "../constants/enums";
+import { JOB_STATUS, CANCELLATION_STAGE } from "../constants/enums";
 import { haversineKm } from "../utils/haversine";
 import { isLocationFresh } from "../utils/locationFreshness";
 import { appError } from "../utils/appError";
@@ -19,6 +19,7 @@ const ACTIVE_WORKER_JOB_STATUSES = [
   JOB_STATUS.ON_THE_WAY,
   JOB_STATUS.ARRIVED,
   JOB_STATUS.IN_PROGRESS,
+  JOB_STATUS.TERMINATION_REQUESTED,
 ];
 
 type WorkerStatsReview = {
@@ -303,6 +304,61 @@ export async function cancelAssignedJob(userId: string, jobId: string, body: unk
   await matchingService.markWorkerCancelledDispatch(jobId, userId);
   await notifyService.notifyWorkerCancelledJob(data.client_id, jobId);
   return data;
+}
+
+export async function respondToTermination(userId: string, jobId: string, body: unknown) {
+  const accept =
+    body && typeof body === "object" && "accept" in body
+      ? Boolean((body as { accept?: unknown }).accept)
+      : false;
+
+  const { data: job } = await supabaseAdmin
+    .from("jobs")
+    .select("*")
+    .eq("id", jobId)
+    .eq("worker_id", userId)
+    .eq("status", JOB_STATUS.TERMINATION_REQUESTED)
+    .maybeSingle();
+
+  if (!job) throw appError(409, "No termination request pending for this job", "INVALID_JOB_STATE");
+
+  if (accept) {
+    const { data, error } = await supabaseAdmin
+      .from("jobs")
+      .update({
+        status: JOB_STATUS.CANCELLED,
+        cancelled_by: "client",
+        cancelled_at: new Date().toISOString(),
+        cancellation_stage: CANCELLATION_STAGE.TERMINATION_REQUESTED,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .select()
+      .single();
+
+    if (error) throw appError(500, error.message, "TERMINATION_ACCEPT_FAILED");
+
+    matchingService.clearDispatchState(jobId);
+    await notifyService.notifyTerminationResolved(job.client_id, jobId, true);
+    return data;
+  } else {
+    const { data, error } = await supabaseAdmin
+      .from("jobs")
+      .update({
+        status: JOB_STATUS.IN_PROGRESS,
+        cancelled_reason: null,
+        cancellation_stage: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .select()
+      .single();
+
+    if (error) throw appError(500, error.message, "TERMINATION_DECLINE_FAILED");
+
+    await notifyService.notifyTerminationResolved(job.client_id, jobId, false);
+    return data;
+  }
 }
 
 export async function getHistory(userId: string) {

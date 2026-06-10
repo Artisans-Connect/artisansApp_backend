@@ -170,3 +170,49 @@ export async function notifyChatMessage(
     data: { type: "chat_message", jobId },
   });
 }
+
+export async function notifyClientCancelledWithFee(
+  workerId: string,
+  jobId: string,
+  stage: string,
+  feeAmount: number,
+): Promise<void> {
+  const bodyText =
+    feeAmount > 0
+      ? `The client cancelled this job. You are entitled to GH₵ ${feeAmount.toFixed(2)} compensation. Please collect from the client.`
+      : stage === "warning"
+        ? "The client cancelled this job shortly after accepting."
+        : "The client cancelled this job.";
+
+  await sendToUser(workerId, {
+    title: "Job cancelled by client",
+    body: bodyText,
+    data: { type: "client_cancelled_job", jobId, stage, feeAmount: String(feeAmount) },
+  });
+}
+
+export async function notifyTerminationRequested(
+  workerId: string,
+  jobId: string,
+  reason: string,
+): Promise<void> {
+  await sendToUser(workerId, {
+    title: "Client requests job termination",
+    body: reason || "The client has requested to terminate this job.",
+    data: { type: "termination_requested", jobId },
+  });
+}
+
+export async function notifyTerminationResolved(
+  clientId: string,
+  jobId: string,
+  accepted: boolean,
+): Promise<void> {
+  await sendToUser(clientId, {
+    title: accepted ? "Termination accepted" : "Termination declined",
+    body: accepted
+      ? "The artisan has accepted the termination. The job has been cancelled."
+      : "The artisan has declined the termination and will continue working.",
+    data: { type: "termination_resolved", jobId, accepted: String(accepted) },
+  });
+}

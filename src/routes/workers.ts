@@ -150,4 +150,17 @@ router.post(
   }),
 );
 
+router.post(
+  "/:jobId/respond-termination",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const data = await workersService.respondToTermination(
+      req.user!.id,
+      paramId(req.params.jobId),
+      req.body,
+    );
+    res.status(200).json({ success: true, data });
+  }),
+);
+
 export default router;

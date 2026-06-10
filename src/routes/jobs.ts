@@ -36,11 +36,29 @@ router.get(
   }),
 );
 
+router.get(
+  "/:id/cancellation-preview",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const preview = await jobsService.getCancellationPreview(req.user!.id, paramId(req.params.id));
+    res.status(200).json({ success: true, data: preview });
+  }),
+);
+
 router.post(
   "/:id/cancel",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
-    const job = await jobsService.cancelJob(req.user!.id, paramId(req.params.id));
+    const job = await jobsService.cancelJob(req.user!.id, paramId(req.params.id), req.body ?? {});
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.post(
+  "/:id/request-termination",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await jobsService.requestTermination(req.user!.id, paramId(req.params.id), req.body ?? {});
     res.status(200).json({ success: true, data: job });
   }),
 );
