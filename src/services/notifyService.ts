@@ -43,6 +43,26 @@ export async function sendToToken(token: string, payload: PushPayload): Promise<
       token,
       notification: { title: payload.title, body: payload.body },
       data: payload.data ?? {},
+      android: {
+        priority: "high",
+        notification: {
+          sound: "default",
+          clickAction: "FLUTTER_NOTIFICATION_CLICK",
+          channelId: "high_importance_channel",
+        },
+      },
+      apns: {
+        headers: {
+          "apns-priority": "10",
+        },
+        payload: {
+          aps: {
+            sound: "default",
+            badge: 1,
+            contentAvailable: true,
+          },
+        },
+      },
     });
   } catch (error) {
     logger("FCM send failed:", error);
@@ -160,13 +180,16 @@ export async function notifyWorkerCancelledJob(clientId: string, jobId: string):
 }
 
 export async function notifyChatMessage(
+  senderId: string,
   recipientId: string,
   jobId: string,
-  preview: string,
 ): Promise<void> {
+  const { data: profile } = await supabaseAdmin.from("profiles").select("full_name").eq("id", senderId).maybeSingle();
+  const senderName = profile?.full_name?.split(" ")[0] ?? "someone";
+
   await sendToUser(recipientId, {
     title: "New message",
-    body: preview,
+    body: `Text from ${senderName}`,
     data: { type: "chat_message", jobId },
   });
 }
