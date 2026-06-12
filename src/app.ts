@@ -29,7 +29,7 @@ app.use('/api', apiRouter);
 
 /* Health check route*/
 app.get('/', (req: Request, res: Response) => {
-  res.status(200).json({ message: 'Welcome to Artisans API' });
+  res.status(200).json({ message: 'Welcome to CraftMatch API' });
 });
 
 app.get('/health', (req: Request, res: Response) => {

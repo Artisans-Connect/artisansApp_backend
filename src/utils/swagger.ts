@@ -21,7 +21,7 @@ export function setupSwagger(app: Application) {
   const swaggerDir = swaggerDirs.find((dir) => fs.existsSync(dir));
   let swaggerDocument: any = {
     openapi: '3.0.0',
-    info: { title: 'Artisans API', version: '1.0.0' },
+    info: { title: 'CraftMatch API', version: '1.0.0' },
     paths: {}
   };
 

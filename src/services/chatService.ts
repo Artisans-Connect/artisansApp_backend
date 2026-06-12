@@ -294,7 +294,7 @@ export async function sendMessage(userId: string, conversationId: string, body: 
   const target = conversation.conversation;
   const recipientId = target.client_id === userId ? target.worker_id : target.client_id;
   if (recipientId) {
-    await notifyService.notifyChatMessage(recipientId, conversationId, parsed.data.content.slice(0, 120));
+    await notifyService.notifyChatMessage(userId, recipientId, conversationId);
   }
 
   return data;

@@ -1,6 +1,6 @@
-# ArtisansApp Backend Architecture
+# CraftMatch Backend Architecture
 
-This document serves as the definitive current backend documentation for the Artisans Express.js backend. It details the existing architecture, standard integration rules, and API endpoint references.
+This document serves as the definitive current backend documentation for the CraftMatch Express.js backend. It details the existing architecture, standard integration rules, and API endpoint references.
 
 ## 1. Modular Architecture & Directory Design
 
