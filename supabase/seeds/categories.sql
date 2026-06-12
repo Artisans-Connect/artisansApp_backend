@@ -7,4 +7,10 @@ INSERT INTO categories (name, slug, icon_name, color_hex, description, sort_orde
   ('Construction',  'construction',  'barricade',           '#FF9800', 'Building, renovation, repairs',                     6),
   ('HVAC',          'hvac',          'snowflake',           '#2196F3', 'Cooling, heating, ventilation',                     7),
   ('Landscaping',   'landscaping',   'mountains',           '#4CAF50', 'Lawn, garden, outdoor design',                      8)
-ON CONFLICT (slug) DO NOTHING;
+ON CONFLICT (slug) DO UPDATE SET
+  name = EXCLUDED.name,
+  icon_name = EXCLUDED.icon_name,
+  color_hex = EXCLUDED.color_hex,
+  description = EXCLUDED.description,
+  sort_order = EXCLUDED.sort_order,
+  is_active = true;

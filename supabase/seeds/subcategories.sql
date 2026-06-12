@@ -3,58 +3,72 @@
 
 -- Plumbing subcategories
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Leak repair', 'leak_repair', 'Faucets, pipes, drainage', 1 FROM categories WHERE slug = 'plumbing';
+SELECT id, 'Leak repair', 'leak_repair', 'Faucets, pipes, drainage', 1 FROM categories WHERE slug = 'plumbing'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Installation', 'installation', 'Fixtures and appliances', 2 FROM categories WHERE slug = 'plumbing';
+SELECT id, 'Installation', 'installation', 'Fixtures and appliances', 2 FROM categories WHERE slug = 'plumbing'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 -- Electrical subcategories
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Wiring', 'wiring', 'Panels, outlets, lighting', 1 FROM categories WHERE slug = 'electrical';
+SELECT id, 'Wiring', 'wiring', 'Panels, outlets, lighting', 1 FROM categories WHERE slug = 'electrical'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Repairs', 'repairs', 'Faults and replacements', 2 FROM categories WHERE slug = 'electrical';
+SELECT id, 'Repairs', 'repairs', 'Faults and replacements', 2 FROM categories WHERE slug = 'electrical'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 -- Carpentry subcategories
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Furniture', 'furniture', 'Build and repair', 1 FROM categories WHERE slug = 'carpentry';
+SELECT id, 'Furniture', 'furniture', 'Build and repair', 1 FROM categories WHERE slug = 'carpentry'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Frames & doors', 'frames_doors', 'Install and adjust', 2 FROM categories WHERE slug = 'carpentry';
+SELECT id, 'Frames & doors', 'frames_doors', 'Install and adjust', 2 FROM categories WHERE slug = 'carpentry'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 -- Cleaning subcategories
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Deep clean', 'deep_clean', 'Home and office', 1 FROM categories WHERE slug = 'cleaning';
+SELECT id, 'Deep clean', 'deep_clean', 'Home and office', 1 FROM categories WHERE slug = 'cleaning'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Move-in/out', 'move_in_out', 'Full property clean', 2 FROM categories WHERE slug = 'cleaning';
+SELECT id, 'Move-in/out', 'move_in_out', 'Full property clean', 2 FROM categories WHERE slug = 'cleaning'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 -- Painting subcategories
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Interior', 'interior', 'Walls and ceilings', 1 FROM categories WHERE slug = 'painting';
+SELECT id, 'Interior', 'interior', 'Walls and ceilings', 1 FROM categories WHERE slug = 'painting'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Exterior', 'exterior', 'Outdoor surfaces', 2 FROM categories WHERE slug = 'painting';
+SELECT id, 'Exterior', 'exterior', 'Outdoor surfaces', 2 FROM categories WHERE slug = 'painting'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 -- Construction subcategories
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Renovation', 'renovation', 'Remodeling work', 1 FROM categories WHERE slug = 'construction';
+SELECT id, 'Renovation', 'renovation', 'Remodeling work', 1 FROM categories WHERE slug = 'construction'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Structural repair', 'structural_repair', 'Masonry and builds', 2 FROM categories WHERE slug = 'construction';
+SELECT id, 'Structural repair', 'structural_repair', 'Masonry and builds', 2 FROM categories WHERE slug = 'construction'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 -- HVAC subcategories
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'AC service', 'ac_service', 'Cooling units', 1 FROM categories WHERE slug = 'hvac';
+SELECT id, 'AC service', 'ac_service', 'Cooling units', 1 FROM categories WHERE slug = 'hvac'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Heating', 'heating', 'Boilers and heaters', 2 FROM categories WHERE slug = 'hvac';
+SELECT id, 'Heating', 'heating', 'Boilers and heaters', 2 FROM categories WHERE slug = 'hvac'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 -- Landscaping subcategories
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Lawn care', 'lawn_care', 'Mowing and trimming', 1 FROM categories WHERE slug = 'landscaping';
+SELECT id, 'Lawn care', 'lawn_care', 'Mowing and trimming', 1 FROM categories WHERE slug = 'landscaping'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
 
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
-SELECT id, 'Garden design', 'garden_design', 'Plants and layout', 2 FROM categories WHERE slug = 'landscaping';
-
-ON CONFLICT DO NOTHING;
+SELECT id, 'Garden design', 'garden_design', 'Plants and layout', 2 FROM categories WHERE slug = 'landscaping'
+ON CONFLICT (category_id, slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, sort_order = EXCLUDED.sort_order, is_active = true;
