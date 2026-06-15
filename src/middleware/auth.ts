@@ -24,6 +24,26 @@ export const authMiddleware = async (req: Request, _res: Response, next: NextFun
       phone: data.user.phone ?? null,
     };
 
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .select("account_status, suspension_reason")
+      .eq("id", data.user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      return next(appError(500, profileError.message, "PROFILE_FETCH_FAILED"));
+    }
+
+    if (profile?.account_status === "suspended") {
+      return next(appError(
+        403,
+        profile.suspension_reason
+          ? `Your account has been suspended. ${profile.suspension_reason}`
+          : "Your account has been suspended. Please contact admin/support if you think this is a mistake.",
+        "ACCOUNT_SUSPENDED",
+      ));
+    }
+
     return next();
   } catch (error) {
     return next(error);

@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { catchAsync } from "../utils/catchAsync";
 import * as jobsService from "../services/jobsService";
+import * as applicationsService from "../services/applicationsService";
 import { paramId } from "../utils/routeParams";
 
 const router = Router();
@@ -24,6 +25,31 @@ router.post(
     const idempotencyKey = req.get("Idempotency-Key");
     const job = await jobsService.createJob(req.user!.id, req.body, idempotencyKey);
     res.status(201).json({ success: true, data: job });
+  }),
+);
+
+router.get(
+  "/:id/applications",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const applications = await applicationsService.listApplicationsForJob(
+      req.user!.id,
+      paramId(req.params.id),
+    );
+    res.status(200).json({ success: true, data: applications });
+  }),
+);
+
+router.post(
+  "/:id/applications/:applicationId/accept",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await applicationsService.acceptApplication(
+      req.user!.id,
+      paramId(req.params.id),
+      paramId(req.params.applicationId),
+    );
+    res.status(200).json({ success: true, data: job });
   }),
 );
 

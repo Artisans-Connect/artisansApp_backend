@@ -13,6 +13,7 @@ import {
 } from "../validators/workers.validator";
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
+import * as applicationsService from "./applicationsService";
 
 const ACTIVE_WORKER_JOB_STATUSES = [
   JOB_STATUS.MATCHED,
@@ -132,36 +133,7 @@ export async function getNearby(query: unknown) {
 }
 
 export async function acceptJob(userId: string, jobId: string) {
-  const { data: dispatch } = await supabaseAdmin
-    .from("job_dispatches")
-    .select("job_id")
-    .eq("job_id", jobId)
-    .eq("worker_id", userId)
-    .in("status", ["sent", "seen"])
-    .maybeSingle();
-
-  if (!dispatch) throw appError(403, "This job was not dispatched to you", "FORBIDDEN");
-
-  const { data, error } = await supabaseAdmin
-    .from("jobs")
-    .update({ status: JOB_STATUS.MATCHED, worker_id: userId })
-    .eq("id", jobId)
-    .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
-    .is("worker_id", null)
-    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name)")
-    .maybeSingle();
-
-  if (error) throw appError(500, error.message, "JOB_ACCEPT_FAILED");
-  if (!data) throw appError(409, "Job already taken or not available", "JOB_ALREADY_TAKEN");
-
-  matchingService.clearDispatchState(jobId);
-  await matchingService.markDispatchAccepted(jobId, userId);
-  await matchingService.markDispatchesExpired(jobId, userId);
-
-  const { data: workerProfile } = await supabaseAdmin.from("profiles").select("full_name").eq("id", userId).maybeSingle();
-  await notifyService.notifyJobMatched(data.client_id, workerProfile?.full_name ?? "Artisan");
-
-  return data;
+  return applicationsService.applyToJob(userId, jobId);
 }
 
 export async function declineJob(userId: string, jobId: string) {

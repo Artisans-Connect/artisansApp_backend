@@ -107,6 +107,29 @@ export async function notifyJobMatched(clientId: string, workerName: string): Pr
   });
 }
 
+export async function notifyClientWorkerApplied(
+  clientId: string,
+  jobId: string,
+  workerName: string,
+): Promise<void> {
+  await sendToUser(clientId, {
+    title: "New artisan interested",
+    body: `${workerName} wants to take your job`,
+    data: { type: "job_application_received", jobId },
+  });
+}
+
+export async function notifyWorkerApplicationAccepted(
+  workerId: string,
+  jobId: string,
+): Promise<void> {
+  await sendToUser(workerId, {
+    title: "Application accepted",
+    body: "The client selected you for this job",
+    data: { type: "job_application_accepted", jobId },
+  });
+}
+
 export async function notifyJobStarted(clientId: string): Promise<void> {
   await sendToUser(clientId, {
     title: "Work started",

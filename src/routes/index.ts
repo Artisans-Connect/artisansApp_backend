@@ -8,6 +8,7 @@ import chatRouter from "./chat";
 import pricingRouter from "./pricing";
 import verificationRouter from "./verification";
 import notificationsRouter from "./notifications";
+import adminRouter from "./admin";
 
 const router = Router();
 
@@ -21,5 +22,6 @@ router.use("/chat", chatRouter);
 router.use("/pricing", pricingRouter);
 router.use("/verification", verificationRouter);
 router.use("/notifications", notificationsRouter);
+router.use("/admin", adminRouter);
 
 export default router;

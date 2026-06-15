@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { catchAsync } from "../utils/catchAsync";
 import * as workersService from "../services/workersService";
+import * as applicationsService from "../services/applicationsService";
 import { paramId } from "../utils/routeParams";
 
 const router = Router();
@@ -93,6 +94,15 @@ router.get(
   catchAsync(async (req: Request, res: Response) => {
     const job = await workersService.getJobRequestById(req.user!.id, paramId(req.params.jobId));
     res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.get(
+  "/me/applications",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const applications = await applicationsService.listWorkerApplications(req.user!.id);
+    res.status(200).json({ success: true, data: applications });
   }),
 );
 
