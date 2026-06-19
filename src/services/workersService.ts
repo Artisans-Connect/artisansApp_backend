@@ -2,7 +2,6 @@ import { supabaseAdmin } from "../config/supabase";
 import { env } from "../config/env";
 import { JOB_STATUS, CANCELLATION_STAGE } from "../constants/enums";
 import { haversineKm } from "../utils/haversine";
-import { isLocationFresh } from "../utils/locationFreshness";
 import { appError } from "../utils/appError";
 import { workerHasCategorySkill } from "../utils/skillMatch";
 import {
@@ -32,6 +31,22 @@ type WorkerStatsReview = {
     full_name?: string | null;
     avatar_url?: string | null;
   } | null;
+};
+
+type NearbyWorker = {
+  id: string;
+  current_lat?: number | null;
+  current_lng?: number | null;
+  location_at?: string | null;
+  rating?: number | null;
+  total_jobs?: number | null;
+  hourly_rate?: number | null;
+  is_available?: boolean | null;
+  is_verified?: boolean | null;
+  skills?: string[] | null;
+  service_areas?: unknown;
+  distance_km?: number | null;
+  profiles?: unknown;
 };
 
 export async function updateLocation(userId: string, body: unknown) {
@@ -82,19 +97,24 @@ export async function getNearby(query: unknown) {
 
   let categoryKey = "";
   if (category_id) {
-    const { data: category } = await supabaseAdmin.from("categories").select("name, slug").eq("id", category_id).maybeSingle();
-    categoryKey = (category?.slug ?? category?.name ?? "").toLowerCase();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      category_id,
+    );
+    const categoryQuery = supabaseAdmin.from("categories").select("name, slug");
+    const { data: category } = await (isUuid
+      ? categoryQuery.eq("id", category_id)
+      : categoryQuery.eq("slug", category_id)
+    ).maybeSingle();
+    categoryKey = (category?.slug ?? category?.name ?? category_id).toLowerCase();
   }
 
   let workersQuery = supabaseAdmin
     .from("workers")
     .select(
-      "id, current_lat, current_lng, location_at, rating, hourly_rate, is_available, is_verified, skills, service_areas, profiles!workers_id_fkey(full_name, avatar_url, phone, bio, location_label)",
+      "id, current_lat, current_lng, location_at, rating, total_jobs, hourly_rate, is_available, is_verified, skills, service_areas, profiles!workers_id_fkey(full_name, avatar_url, phone, bio, location_label)",
     );
 
-  if (hasProximity) {
-    workersQuery = workersQuery.eq("is_available", true);
-  } else if (env.NODE_ENV !== "development") {
+  if (env.NODE_ENV !== "development") {
     workersQuery = workersQuery.order("is_verified", { ascending: false });
   }
 
@@ -102,31 +122,30 @@ export async function getNearby(query: unknown) {
 
   if (error) throw appError(500, error.message, "NEARBY_FETCH_FAILED");
 
-  let result: any[] = workers ?? [];
+  let result: NearbyWorker[] = (workers ?? []) as NearbyWorker[];
 
-  if (hasProximity) {
-    result = result.filter((w) => {
-      if (!isLocationFresh(w.location_at)) return false;
-      if (!categoryKey) return true;
-      return workerHasCategorySkill(w.skills, categoryKey);
-    });
-  } else if (categoryKey) {
-    result = result.filter((w) => {
-      return workerHasCategorySkill(w.skills, categoryKey);
-    });
+  if (categoryKey) {
+    result = result.filter((w) => workerHasCategorySkill(w.skills, categoryKey));
   }
 
   if (hasProximity) {
-    result = result
-      .filter((w) => w.current_lat != null && w.current_lng != null)
-      .map((w) => ({
-        ...w,
-        distance_km: haversineKm(lat, lng, w.current_lat!, w.current_lng!),
-      }))
-      .filter((w) => w.distance_km <= radius_km)
-      .sort((a, b) => scoreNearbyWorker(b, radius_km) - scoreNearbyWorker(a, radius_km));
+    const withDistance = result.map((worker) => {
+      const workerLat = Number(worker.current_lat);
+      const workerLng = Number(worker.current_lng);
+      const hasWorkerCoords = Number.isFinite(workerLat) && Number.isFinite(workerLng);
+      return {
+        ...worker,
+        distance_km: hasWorkerCoords ? haversineKm(lat, lng, workerLat, workerLng) : null,
+      };
+    });
+    const withinRadius = withDistance.filter(
+      (worker) => typeof worker.distance_km === "number" && worker.distance_km <= radius_km,
+    );
+    result = (withinRadius.length > 0 ? withinRadius : withDistance).sort((a, b) =>
+      compareDiscoveryWorkers(a, b, radius_km),
+    );
   } else {
-    result = result.sort((a, b) => Number(b.is_verified) - Number(a.is_verified) || (b.rating ?? 0) - (a.rating ?? 0));
+    result = result.sort(compareWorkersWithoutDistance);
   }
 
   return result.slice(0, limit);
@@ -510,11 +529,28 @@ function responseTimeStats(dispatches: Array<{ created_at: string | null; respon
   };
 }
 
-function scoreNearbyWorker(worker: any, radiusKm: number): number {
-  const proximityScore = Math.max(0, 1 - Number(worker.distance_km ?? radiusKm) / Math.max(radiusKm, 1));
+function scoreNearbyWorker(worker: NearbyWorker, radiusKm: number): number {
+  const distance = typeof worker.distance_km === "number" ? worker.distance_km : radiusKm;
+  const proximityScore = Math.max(0, 1 - distance / Math.max(radiusKm, 1));
   const ratingScore = Math.max(0, Math.min(Number(worker.rating ?? 0) / 5, 1));
   const verificationScore = worker.is_verified ? 1 : 0;
-  return proximityScore * 0.5 + ratingScore * 0.3 + verificationScore * 0.2;
+  const availabilityScore = worker.is_available ? 1 : 0;
+  return proximityScore * 0.45 + verificationScore * 0.25 + ratingScore * 0.2 + availabilityScore * 0.1;
+}
+
+function compareDiscoveryWorkers(a: NearbyWorker, b: NearbyWorker, radiusKm: number): number {
+  const scoreDelta = scoreNearbyWorker(b, radiusKm) - scoreNearbyWorker(a, radiusKm);
+  if (scoreDelta !== 0) return scoreDelta;
+  return compareWorkersWithoutDistance(a, b);
+}
+
+function compareWorkersWithoutDistance(a: NearbyWorker, b: NearbyWorker): number {
+  return (
+    Number(b.is_verified) - Number(a.is_verified) ||
+    Number(b.is_available) - Number(a.is_available) ||
+    Number(b.rating ?? 0) - Number(a.rating ?? 0) ||
+    Number(b.total_jobs ?? 0) - Number(a.total_jobs ?? 0)
+  );
 }
 
 export async function verifyMeForDemo(userId: string) {

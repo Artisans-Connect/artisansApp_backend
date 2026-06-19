@@ -7,7 +7,7 @@ const serviceType = z.enum(["home_visit", "remote", "either"]);
 
 export const createJobSchema = z
   .object({
-    category_id: z.uuid(),
+    category_id: z.string().trim().min(1),
     title: z.string().trim().min(1).max(80),
     description: z.string().trim().min(1),
     photo_urls: z.array(z.string().url()).default([]),

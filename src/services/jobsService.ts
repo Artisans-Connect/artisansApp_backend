@@ -24,6 +24,21 @@ async function findJobByIdempotencyKey(clientId: string, idempotencyKey: string)
   return job;
 }
 
+async function resolveCategoryId(categoryIdOrSlug: string) {
+  const isUuid = UUID_RE.test(categoryIdOrSlug);
+  const query = supabaseAdmin.from("categories").select("id").eq("is_active", true);
+  const { data, error } = await (isUuid
+    ? query.eq("id", categoryIdOrSlug)
+    : query.eq("slug", categoryIdOrSlug)
+  ).maybeSingle();
+
+  if (error) throw appError(500, error.message, "CATEGORY_LOOKUP_FAILED");
+  if (!data?.id) {
+    throw appError(400, "Selected service category is not available yet", "CATEGORY_NOT_AVAILABLE");
+  }
+  return data.id as string;
+}
+
 export async function createJob(userId: string, body: unknown, idempotencyKeyHeader?: string) {
   const parsed = createJobSchema.safeParse(body);
   if (!parsed.success) {
@@ -40,6 +55,7 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
   }
 
   const input = parsed.data;
+  const categoryId = await resolveCategoryId(input.category_id);
   const status = input.requested_worker_id ? JOB_STATUS.MATCHING : initialJobStatus(input.job_mode);
 
   const expiresAt =
@@ -51,7 +67,7 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
     .from("jobs")
     .insert({
       client_id: userId,
-      category_id: input.category_id,
+      category_id: categoryId,
       title: input.title,
       description: input.description,
       photo_urls: input.photo_urls,

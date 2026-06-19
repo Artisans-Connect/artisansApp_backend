@@ -1,3 +1,35 @@
+-- Expand service catalog to better reflect common Ghanaian artisan trades.
+-- Idempotent: existing slugs are updated, new slugs are inserted.
+
+INSERT INTO categories (name, slug, icon_name, color_hex, description, sort_order) VALUES
+  ('Plumbing',                    'plumbing',         'drop',         '#4648D4', 'Repairs, installation, maintenance',                  1),
+  ('Electrical',                  'electrical',       'lightning',    '#0058BE', 'Wiring, repairs, installations',                      2),
+  ('Carpentry',                   'carpentry',        'wrench',       '#B55D00', 'Furniture, cabinets, doors, woodwork',                3),
+  ('Masonry & Blockwork',          'masonry',          'bricks',       '#8B5E3C', 'Blocks, plastering, concrete and masonry repairs',    4),
+  ('Welding & Fabrication',        'welding',          'fire',         '#607D8B', 'Metal gates, burglar proofing and fabrication',        5),
+  ('Construction & Renovation',    'construction',     'barricade',    '#FF9800', 'Building, renovation and structural repairs',          6),
+  ('Automotive & Small Engine',    'automotive',       'car',          '#795548', 'Vehicle, motorbike and small engine repairs',          7),
+  ('Painting',                    'painting',         'palette',      '#F44336', 'Interior, exterior and decorative painting',           8),
+  ('Tiling & Flooring',            'tiling',           'squares_four', '#009688', 'Floor tiles, wall tiles and floor finishing',          9),
+  ('Roofing & Ceiling',            'roofing',          'house_line',   '#9C27B0', 'Roofing sheets, ceiling panels and leak fixes',        10),
+  ('HVAC & Refrigeration',         'hvac',             'snowflake',    '#2196F3', 'Cooling, refrigeration and ventilation',               11),
+  ('Appliance & Electronics Repair','appliance_repair','plug',         '#3F51B5', 'Home appliances, electronics and diagnostics',          12),
+  ('Cleaning',                    'cleaning',         'broom',        '#00A86B', 'Home, office and deep cleaning',                       13),
+  ('Landscaping',                 'landscaping',      'mountains',    '#4CAF50', 'Lawn, garden and outdoor maintenance',                 14),
+  ('Fashion & Dressmaking',        'fashion',          'scissors',     '#E91E63', 'Tailoring, alterations and garment making',            15),
+  ('Hair & Beauty',                'beauty',           'scissors',     '#AD1457', 'Hairdressing, barbering and beauty services',          16),
+  ('Catering & Events',            'catering',         'fork_knife',   '#C15A3D', 'Cooking, baking and event food services',              17),
+  ('Upholstery',                  'upholstery',       'armchair',     '#6D4C41', 'Sofas, cushions, curtains and soft furnishings',       18),
+  ('Security & Locksmith',         'security',         'lock_key',     '#455A64', 'Locks, keys, burglar proofing and access repairs',     19),
+  ('ICT & Device Support',         'ict_support',      'desktop_tower','#1565C0', 'Computer, phone, network and device support',          20)
+ON CONFLICT (slug) DO UPDATE SET
+  name = EXCLUDED.name,
+  icon_name = EXCLUDED.icon_name,
+  color_hex = EXCLUDED.color_hex,
+  description = EXCLUDED.description,
+  sort_order = EXCLUDED.sort_order,
+  is_active = true;
+
 INSERT INTO subcategories (category_id, name, slug, description, sort_order)
 SELECT c.id, s.name, s.slug, s.description, s.sort_order
 FROM categories c
