@@ -1,0 +1,17 @@
+project_id = "qdeznjpvkhrxesjykovi"
+
+[auth]
+site_url = "https://craft-match-verification-portal.vercel.app"
+additional_redirect_urls = [
+  "https://craft-match-verification-portal.vercel.app/email-verified",
+  "https://craft-match-verification-portal.vercel.app/update-password",
+  "craftmatch://login",
+]
+
+[auth.email.template.confirmation]
+subject = "Confirm your CraftMatch email"
+content_path = "./supabase/templates/confirm_email.html"
+
+[auth.email.template.recovery]
+subject = "Reset your CraftMatch password"
+content_path = "./supabase/templates/reset_password.html"
