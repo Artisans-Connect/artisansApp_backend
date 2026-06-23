@@ -5,6 +5,11 @@ import { haversineKm } from "../utils/haversine";
 import { isLocationFresh } from "../utils/locationFreshness";
 import { workerHasCategorySkill } from "../utils/skillMatch";
 import { logger } from "../utils/logger";
+import {
+  applyFairnessSlot,
+  rankRecommendationCandidates,
+  type RecommendationCandidate,
+} from "./recommendationEngine";
 import * as notifyService from "./notifyService";
 
 type WorkerRow = {
@@ -24,6 +29,19 @@ type DispatchState = {
   radiusIndex: number;
   timeout?: NodeJS.Timeout;
 };
+
+type WorkerRecommendationCandidate = WorkerRow &
+  RecommendationCandidate & {
+    current_lat: number;
+    current_lng: number;
+  };
+
+type DispatchStatsRow = {
+  worker_id: string;
+  status: string | null;
+};
+
+const RESPONSIVE_DISPATCH_STATUSES = new Set<string>(["accepted", "declined", "seen"]);
 
 const dispatchStateByJob = new Map<string, DispatchState>();
 
@@ -82,45 +100,52 @@ async function fetchCandidateWorkers(
   }) as WorkerRow[];
 }
 
-function rankWorkers(
+async function rankWorkers(
   workers: WorkerRow[],
   job: { location_lat: number; location_lng: number },
-  radiusKm: number,
-): WorkerRow[] {
-  return [...workers].sort((a, b) => {
-    return scoreWorker(b, job, radiusKm) - scoreWorker(a, job, radiusKm);
-  });
+  limit: number,
+): Promise<WorkerRow[]> {
+  const responseRates = await fetchWorkerResponseRates(workers.map((worker) => worker.id));
+  const candidates: WorkerRecommendationCandidate[] = workers.map((worker) => ({
+    ...worker,
+    current_lat: worker.current_lat!,
+    current_lng: worker.current_lng!,
+    responseRate: responseRates.get(worker.id) ?? 0,
+  }));
+
+  const ranked = rankRecommendationCandidates(candidates, job);
+  return applyFairnessSlot(ranked, limit);
 }
 
-function scoreWorker(
-  worker: WorkerRow,
-  job: { location_lat: number; location_lng: number },
-  radiusKm: number,
-): number {
-  const distanceKm = haversineKm(job.location_lat, job.location_lng, worker.current_lat!, worker.current_lng!);
-  const proximityScore = Math.max(0, 1 - distanceKm / Math.max(radiusKm, 1));
-  const ratingScore = Math.max(0, Math.min(Number(worker.rating ?? 0) / 5, 1));
-  const verificationScore = worker.is_verified ? 1 : 0;
-  const freshnessScore = locationFreshnessScore(worker.location_at);
-  const jobsScore = Math.max(0, Math.min(Number(worker.total_jobs ?? 0) / 50, 1));
+async function fetchWorkerResponseRates(workerIds: string[]): Promise<Map<string, number>> {
+  if (workerIds.length === 0) return new Map();
 
-  return (
-    proximityScore * 0.4 +
-    ratingScore * 0.25 +
-    verificationScore * 0.2 +
-    freshnessScore * 0.1 +
-    jobsScore * 0.05
+  const { data, error } = await supabaseAdmin
+    .from("job_dispatches")
+    .select("worker_id, status")
+    .in("worker_id", workerIds);
+
+  if (error) {
+    logger(`dispatch response-rate warning: ${error.message}`);
+    return new Map();
+  }
+
+  const stats = new Map<string, { received: number; responded: number }>();
+  for (const row of (data ?? []) as DispatchStatsRow[]) {
+    const current = stats.get(row.worker_id) ?? { received: 0, responded: 0 };
+    current.received += 1;
+    if (row.status && RESPONSIVE_DISPATCH_STATUSES.has(row.status)) {
+      current.responded += 1;
+    }
+    stats.set(row.worker_id, current);
+  }
+
+  return new Map(
+    [...stats.entries()].map(([workerId, value]) => [
+      workerId,
+      value.received === 0 ? 0 : value.responded / value.received,
+    ]),
   );
-}
-
-function locationFreshnessScore(locationAt: string | null): number {
-  if (!locationAt) return 0;
-  const ageMinutes = (Date.now() - new Date(locationAt).getTime()) / (1000 * 60);
-  if (!Number.isFinite(ageMinutes) || ageMinutes < 0) return 0.5;
-  if (ageMinutes <= 5) return 1;
-  if (ageMinutes <= 15) return 0.75;
-  if (ageMinutes <= 30) return 0.5;
-  return 0.25;
 }
 
 async function recordDispatches(
@@ -249,8 +274,11 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
 
   while (batch.length === 0 && state.radiusIndex < MATCHING.RADIUS_STEPS_KM.length) {
     radiusKm = MATCHING.RADIUS_STEPS_KM[state.radiusIndex]!;
-    const candidates = rankWorkers(await fetchCandidateWorkers(job, exclude, radiusKm), job, radiusKm);
-    batch = candidates.slice(0, MATCHING.WORKERS_PER_ROUND);
+    batch = await rankWorkers(
+      await fetchCandidateWorkers(job, exclude, radiusKm),
+      job,
+      MATCHING.WORKERS_PER_ROUND,
+    );
     if (batch.length === 0) {
       state.radiusIndex += 1;
     }
