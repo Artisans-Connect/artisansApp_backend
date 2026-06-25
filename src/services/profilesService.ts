@@ -70,6 +70,46 @@ export async function getProfile(userId: string) {
   if (error) throw appError(500, error.message, "PROFILE_FETCH_FAILED");
   if (!profile) throw appError(404, "Profile not found", "PROFILE_NOT_FOUND");
 
+  // Auto-sync Google/Auth Sign-in metadata if fields are empty
+  const hasMissingName = !profile.full_name || profile.full_name.trim() === "";
+  const hasMissingAvatar = !profile.avatar_url;
+  const hasMissingPhone = !profile.phone;
+
+  if (hasMissingName || hasMissingAvatar || hasMissingPhone) {
+    try {
+      const { data: authData, error: authError } = await supabaseAdmin.auth.admin.getUserById(userId);
+      if (!authError && authData?.user) {
+        const metadata = authData.user.user_metadata || {};
+        const nameFromMeta = metadata.full_name || metadata.name || "";
+        const avatarFromMeta = metadata.avatar_url || metadata.picture || "";
+        const phoneFromMeta = authData.user.phone || metadata.phone || "";
+
+        const updates: Record<string, any> = {};
+        if (hasMissingName && nameFromMeta) {
+          updates.full_name = nameFromMeta;
+          profile.full_name = nameFromMeta;
+        }
+        if (hasMissingAvatar && avatarFromMeta) {
+          updates.avatar_url = avatarFromMeta;
+          profile.avatar_url = avatarFromMeta;
+        }
+        if (hasMissingPhone && phoneFromMeta) {
+          updates.phone = phoneFromMeta;
+          profile.phone = phoneFromMeta;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await supabaseAdmin
+            .from("profiles")
+            .update(updates)
+            .eq("id", userId);
+        }
+      }
+    } catch (e) {
+      console.error("Error auto-syncing auth metadata:", e);
+    }
+  }
+
   const { data: worker } = await supabaseAdmin
     .from("workers")
     .select("*")
