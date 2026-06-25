@@ -214,10 +214,11 @@ async function transitionAssignedJob(
   allowedStatuses: string[],
   nextStatus: string,
   errorMessage: string,
+  extraUpdates: Record<string, unknown> = {},
 ) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .update({ status: nextStatus, updated_at: new Date().toISOString() })
+    .update({ status: nextStatus, updated_at: new Date().toISOString(), ...extraUpdates })
     .eq("id", jobId)
     .eq("worker_id", userId)
     .in("status", allowedStatuses)
@@ -260,6 +261,7 @@ export async function startJob(userId: string, jobId: string) {
     [JOB_STATUS.ARRIVED],
     JOB_STATUS.IN_PROGRESS,
     "Job can only be started after you mark arrival",
+    { started_at: new Date().toISOString() },
   );
 
   await notifyService.notifyJobStarted(data.client_id);
@@ -290,6 +292,16 @@ export async function cancelAssignedJob(userId: string, jobId: string, body: unk
 
   if (error) throw appError(500, error.message, "JOB_CANCEL_FAILED");
   if (!data) throw appError(409, "Only your active assigned jobs can be cancelled", "INVALID_JOB_STATE");
+
+  // Reset worker's application status to withdrawn so it is no longer shown as active/accepted on their end
+  const { error: appStatusError } = await supabaseAdmin
+    .from("job_applications")
+    .update({ status: "withdrawn" })
+    .eq("job_id", jobId)
+    .eq("worker_id", userId);
+  if (appStatusError) {
+    console.error("Warning: failed to update application status to withdrawn:", appStatusError.message);
+  }
 
   matchingService.clearDispatchState(jobId);
   await matchingService.markWorkerCancelledDispatch(jobId, userId);
@@ -567,4 +579,42 @@ export async function verifyMeForDemo(userId: string) {
 
   if (error) throw appError(500, error.message, "WORKER_VERIFY_FAILED");
   return data;
+}
+
+export async function getWorkerEarnings(userId: string) {
+  const { data: jobs, error } = await supabaseAdmin
+    .from("jobs")
+    .select("id, title, updated_at, completion_details:job_completion_details(artisan_payout, gross_amount, platform_fee)")
+    .eq("worker_id", userId)
+    .eq("status", "completed")
+    .order("updated_at", { ascending: false });
+
+  if (error) throw appError(500, error.message, "EARNINGS_FETCH_FAILED");
+
+  let totalEarned = 0;
+  const history = (jobs ?? []).map((job) => {
+    const details = Array.isArray(job.completion_details)
+      ? job.completion_details[0]
+      : job.completion_details;
+
+    const payout = details?.artisan_payout ? Number(details.artisan_payout) : 0;
+    const gross = details?.gross_amount ? Number(details.gross_amount) : 0;
+    const fee = details?.platform_fee ? Number(details.platform_fee) : 0;
+
+    totalEarned += payout;
+
+    return {
+      job_id: job.id,
+      title: job.title,
+      completed_at: job.updated_at,
+      gross_amount: gross,
+      platform_fee: fee,
+      artisan_payout: payout,
+    };
+  });
+
+  return {
+    total_earned: Math.round(totalEarned * 100) / 100,
+    history,
+  };
 }

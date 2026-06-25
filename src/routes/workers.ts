@@ -115,6 +115,15 @@ router.get(
   }),
 );
 
+router.get(
+  "/me/earnings",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const earnings = await workersService.getWorkerEarnings(req.user!.id);
+    res.status(200).json({ success: true, data: earnings });
+  }),
+);
+
 router.put(
   "/me/demo-verify",
   authMiddleware,

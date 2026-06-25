@@ -494,27 +494,63 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
   }
 
   const input = parsed.data;
-  const hasCompletionDetails =
-    input.hours_spent != null ||
-    Boolean(input.materials_used) ||
-    Boolean(input.notes) ||
-    input.photo_urls.length > 0;
 
-  if (hasCompletionDetails) {
-    const { error: detailsError } = await supabaseAdmin.from("job_completion_details").upsert(
-      {
-        job_id: jobId,
-        worker_id: job.worker_id,
-        hours_spent: input.hours_spent ?? null,
-        materials_used: input.materials_used ?? null,
-        notes: input.notes ?? null,
-        photo_urls: input.photo_urls,
-      },
-      { onConflict: "job_id" },
-    );
-
-    if (detailsError) throw appError(500, detailsError.message, "JOB_COMPLETION_DETAILS_FAILED");
+  // Compute settlement fields
+  let baseRate = 0;
+  if (job.budget_type === "fixed") {
+    baseRate = Number(job.budget_fixed ?? 0);
+  } else {
+    const { data: worker } = await supabaseAdmin
+      .from("workers")
+      .select("hourly_rate")
+      .eq("id", job.worker_id)
+      .maybeSingle();
+    const workerHourlyRate = worker?.hourly_rate ? Number(worker.hourly_rate) : 0;
+    const hourlyRate = workerHourlyRate > 0 ? workerHourlyRate : await getCategoryBaseFee(job.category_id);
+    const hours = input.hours_spent != null ? Number(input.hours_spent) : 1;
+    baseRate = Math.round(hours * hourlyRate * 100) / 100;
   }
+
+  let distanceCost = 0;
+  if (job.location_lat != null && job.location_lng != null) {
+    const KUMASI_CBD_LAT = 6.6885;
+    const KUMASI_CBD_LNG = -1.6244;
+    const DISTANCE_RATE_PER_KM = 3.0;
+    const distanceKm = haversineKm(
+      Number(job.location_lat),
+      Number(job.location_lng),
+      KUMASI_CBD_LAT,
+      KUMASI_CBD_LNG,
+    );
+    distanceCost = Math.round(distanceKm * DISTANCE_RATE_PER_KM);
+  }
+
+  const subtotal = baseRate + distanceCost;
+  const urgencyPremium = job.job_mode === "asap" ? Math.round(subtotal * 0.20) : 0;
+
+  const grossAmount = Math.round((baseRate + distanceCost + urgencyPremium) * 100) / 100;
+  const platformFee = Math.round((grossAmount * 0.10) * 100) / 100; // 10% platform fee
+  const artisanPayout = Math.round((grossAmount - platformFee) * 100) / 100;
+
+  const { error: detailsError } = await supabaseAdmin.from("job_completion_details").upsert(
+    {
+      job_id: jobId,
+      worker_id: job.worker_id,
+      hours_spent: input.hours_spent ?? null,
+      materials_used: input.materials_used ?? null,
+      notes: input.notes ?? null,
+      photo_urls: input.photo_urls,
+      base_rate: baseRate,
+      distance_cost: distanceCost,
+      urgency_premium: urgencyPremium,
+      gross_amount: grossAmount,
+      platform_fee: platformFee,
+      artisan_payout: artisanPayout,
+    },
+    { onConflict: "job_id" },
+  );
+
+  if (detailsError) throw appError(500, detailsError.message, "JOB_COMPLETION_DETAILS_FAILED");
 
   const { data, error } = await supabaseAdmin
     .from("jobs")
@@ -649,7 +685,7 @@ export async function getMatchingProgress(userId: string, jobId: string) {
 export async function getJobById(userId: string, jobId: string) {
   const { data: job, error } = await supabaseAdmin
     .from("jobs")
-    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .eq("id", jobId)
     .maybeSingle();
 
