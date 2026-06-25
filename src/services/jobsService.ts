@@ -452,6 +452,13 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
 
   matchingService.clearDispatchState(jobId);
 
+  // Decline any currently accepted applications to prevent auto-matching the old worker again
+  await supabaseAdmin
+    .from("job_applications")
+    .update({ status: "declined", updated_at: new Date().toISOString() })
+    .eq("job_id", jobId)
+    .eq("status", "accepted");
+
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .update({
@@ -464,7 +471,7 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)
-    .select()
+    .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
     .single();
 
   if (error) throw appError(500, error.message, "JOB_REOPEN_FAILED");
@@ -495,6 +502,14 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
 
   const input = parsed.data;
 
+  // Auto-calculate hours spent
+  let calculatedHours = 1;
+  if (job.started_at) {
+    const msDiff = Date.now() - new Date(job.started_at).getTime();
+    calculatedHours = Math.max(0.1, msDiff / (1000 * 60 * 60));
+  }
+  const hoursSpent = Math.round(calculatedHours * 100) / 100;
+
   // Compute settlement fields
   let baseRate = 0;
   if (job.budget_type === "fixed") {
@@ -507,8 +522,7 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
       .maybeSingle();
     const workerHourlyRate = worker?.hourly_rate ? Number(worker.hourly_rate) : 0;
     const hourlyRate = workerHourlyRate > 0 ? workerHourlyRate : await getCategoryBaseFee(job.category_id);
-    const hours = input.hours_spent != null ? Number(input.hours_spent) : 1;
-    baseRate = Math.round(hours * hourlyRate * 100) / 100;
+    baseRate = Math.round(hoursSpent * hourlyRate * 100) / 100;
   }
 
   let distanceCost = 0;
@@ -528,7 +542,12 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
   const subtotal = baseRate + distanceCost;
   const urgencyPremium = job.job_mode === "asap" ? Math.round(subtotal * 0.20) : 0;
 
-  const grossAmount = Math.round((baseRate + distanceCost + urgencyPremium) * 100) / 100;
+  let grossAmount = Math.round((baseRate + distanceCost + urgencyPremium) * 100) / 100;
+  
+  if (input.proposed_amount != null && input.proposed_amount > 0) {
+    grossAmount = input.proposed_amount;
+  }
+
   const platformFee = Math.round((grossAmount * 0.10) * 100) / 100; // 10% platform fee
   const artisanPayout = Math.round((grossAmount - platformFee) * 100) / 100;
 
@@ -536,7 +555,7 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
     {
       job_id: jobId,
       worker_id: job.worker_id,
-      hours_spent: input.hours_spent ?? null,
+      hours_spent: hoursSpent,
       materials_used: input.materials_used ?? null,
       notes: input.notes ?? null,
       photo_urls: input.photo_urls,

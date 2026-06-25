@@ -79,6 +79,26 @@ router.delete(
   }),
 );
 
+router.post(
+  "/me/gallery",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const { url } = req.body ?? {};
+    const profile = await profilesService.addGalleryPhoto(req.user!.id, url);
+    res.status(200).json({ success: true, data: profile });
+  }),
+);
+
+router.post(
+  "/me/gallery/delete",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const { url } = req.body ?? {};
+    const profile = await profilesService.deleteGalleryPhoto(req.user!.id, url);
+    res.status(200).json({ success: true, data: profile });
+  }),
+);
+
 router.get(
   "/:id",
   authMiddleware,

@@ -45,6 +45,7 @@ export function initialJobStatus(jobMode: string): string {
 }
 
 export const completeJobSchema = z.object({
+  proposed_amount: z.number().positive().max(999999.99).optional(),
   hours_spent: z.number().positive().max(999.99).optional(),
   materials_used: z.string().trim().max(1000).optional(),
   notes: z.string().trim().max(2000).optional(),

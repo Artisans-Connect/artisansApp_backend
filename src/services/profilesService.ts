@@ -126,6 +126,25 @@ export async function getProfile(userId: string) {
         .maybeSingle()
     : { data: null };
 
+  // Fetch completed job photos and custom portfolio photos for the gallery
+  const { data: completions } = await supabaseAdmin
+    .from("job_completion_details")
+    .select("photo_urls, jobs(status)")
+    .eq("worker_id", userId);
+
+  const jobImages: string[] = [];
+  if (completions) {
+    for (const comp of completions) {
+      const job = Array.isArray(comp.jobs) ? comp.jobs[0] : comp.jobs;
+      const status = job?.status;
+      if (comp.photo_urls && Array.isArray(comp.photo_urls)) {
+        if (!job || status === "completed" || status === "pending_client_approval") {
+          jobImages.push(...comp.photo_urls);
+        }
+      }
+    }
+  }
+
   return {
     ...profile,
     verification_status: verification?.status ?? null,
@@ -133,6 +152,7 @@ export async function getProfile(userId: string) {
     verification_application_number: verification?.application_number ?? null,
     worker: worker ?? null,
     has_worker_profile: worker != null,
+    job_images: jobImages,
   };
 }
 
@@ -294,3 +314,68 @@ export async function revokeNotificationDevice(userId: string, tokenHash: string
   if (error) throw appError(500, error.message, "NOTIFICATION_DEVICE_REVOKE_FAILED");
   return { success: true, revoked: Boolean(data) };
 }
+
+export async function addGalleryPhoto(userId: string, url: string) {
+  if (!url || typeof url !== "string") {
+    throw appError(400, "Invalid photo URL", "VALIDATION_ERROR");
+  }
+
+  // Find the row where job_id is null for this worker
+  const { data: existing } = await supabaseAdmin
+    .from("job_completion_details")
+    .select("id, photo_urls")
+    .eq("worker_id", userId)
+    .is("job_id", null)
+    .maybeSingle();
+
+  if (existing) {
+    const urls = existing.photo_urls && Array.isArray(existing.photo_urls) ? existing.photo_urls : [];
+    if (!urls.includes(url)) {
+      urls.push(url);
+    }
+    const { error } = await supabaseAdmin
+      .from("job_completion_details")
+      .update({ photo_urls: urls })
+      .eq("id", existing.id);
+    if (error) throw appError(500, error.message, "GALLERY_UPDATE_FAILED");
+  } else {
+    const { error } = await supabaseAdmin
+      .from("job_completion_details")
+      .insert({
+        worker_id: userId,
+        job_id: null,
+        photo_urls: [url],
+      });
+    if (error) throw appError(500, error.message, "GALLERY_UPDATE_FAILED");
+  }
+
+  return getProfile(userId);
+}
+
+export async function deleteGalleryPhoto(userId: string, url: string) {
+  if (!url || typeof url !== "string") {
+    throw appError(400, "Invalid photo URL", "VALIDATION_ERROR");
+  }
+
+  // Fetch all completion details for this worker
+  const { data: rows } = await supabaseAdmin
+    .from("job_completion_details")
+    .select("id, photo_urls")
+    .eq("worker_id", userId);
+
+  if (rows) {
+    for (const row of rows) {
+      if (row.photo_urls && Array.isArray(row.photo_urls) && row.photo_urls.includes(url)) {
+        const updatedUrls = row.photo_urls.filter((u) => u !== url);
+        const { error } = await supabaseAdmin
+          .from("job_completion_details")
+          .update({ photo_urls: updatedUrls })
+          .eq("id", row.id);
+        if (error) throw appError(500, error.message, "GALLERY_PHOTO_DELETE_FAILED");
+      }
+    }
+  }
+
+  return getProfile(userId);
+}
+
