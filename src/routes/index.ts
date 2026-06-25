@@ -9,6 +9,7 @@ import pricingRouter from "./pricing";
 import verificationRouter from "./verification";
 import notificationsRouter from "./notifications";
 import adminRouter from "./admin";
+import searchRouter from "./search";
 
 const router = Router();
 
@@ -23,5 +24,6 @@ router.use("/pricing", pricingRouter);
 router.use("/verification", verificationRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/admin", adminRouter);
+router.use("/search", searchRouter);
 
 export default router;

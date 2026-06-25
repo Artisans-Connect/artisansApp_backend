@@ -12,6 +12,7 @@ const envSchema = z
     VERIFICATION_ADMIN_KEY: z.string().min(8).optional(),
     FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1).optional(),
     FIREBASE_SERVICE_ACCOUNT_BASE64: z.string().min(1).optional(),
+    GEMINI_API_KEY: z.string().min(1).optional(),
   })
   .refine((data) => data.FIREBASE_SERVICE_ACCOUNT_PATH || data.FIREBASE_SERVICE_ACCOUNT_BASE64, {
     message: "Either FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_BASE64 is required",
