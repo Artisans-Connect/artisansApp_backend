@@ -51,6 +51,9 @@ const statusSchema = z.object({
   rejection_reason: z.string().trim().optional().default(""),
   admin_notes: z.string().trim().optional().default(""),
   more_info_message: z.string().trim().optional().default(""),
+  adopt_trade: z.boolean().optional(),
+  adopt_category_id: z.string().uuid().optional().nullable(),
+  assigned_trade: z.string().trim().optional().nullable(),
 });
 
 type VerificationStatus = z.infer<typeof statusSchema>["status"];
@@ -456,6 +459,46 @@ export async function uploadApplicationDocuments(userId: string | null, body: un
   return uploadedDocuments;
 }
 
+async function processTradeAdoptionOrAssignment(
+  verificationId: string,
+  tradeCategory: string,
+  adoptTrade?: boolean,
+  adoptCategoryId?: string | null,
+  assignedTrade?: string | null
+): Promise<string> {
+  if (assignedTrade) {
+    return assignedTrade;
+  }
+
+  if (adoptTrade && adoptCategoryId) {
+    const slug = tradeCategory.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    
+    // Check if subcategory already exists
+    const { data: existing } = await supabaseAdmin
+      .from("subcategories")
+      .select("name")
+      .eq("category_id", adoptCategoryId)
+      .eq("slug", slug)
+      .maybeSingle();
+
+    if (!existing) {
+      // Create subcategory
+      await supabaseAdmin.from("subcategories").insert({
+        category_id: adoptCategoryId,
+        name: tradeCategory.trim(),
+        slug,
+        description: `Custom adopted trade: ${tradeCategory.trim()}`,
+        is_active: true,
+        sort_order: 100,
+      });
+    }
+
+    return tradeCategory.trim();
+  }
+
+  return tradeCategory;
+}
+
 async function syncApprovedVerificationToAccount(verification: Record<string, any>) {
   const workerId = verification.worker_id as string | undefined;
   if (!workerId) return;
@@ -465,7 +508,10 @@ async function syncApprovedVerificationToAccount(verification: Record<string, an
     .map((part) => (typeof part === "string" ? part.trim() : ""))
     .filter(Boolean);
 
-  const profilePatch: Record<string, unknown> = { updated_at: now };
+  const profilePatch: Record<string, unknown> = {
+    role: "worker",
+    updated_at: now,
+  };
   if (typeof verification.full_name === "string" && verification.full_name.trim()) {
     profilePatch.full_name = verification.full_name.trim();
   }
@@ -538,7 +584,7 @@ export async function setApplicationStatus(adminUserId: string, verificationId: 
   if (input.admin_notes) patch.admin_notes = input.admin_notes;
   if (input.more_info_message) patch.more_info_message = input.more_info_message;
 
-  const { data, error } = await supabaseAdmin
+  let { data, error } = await supabaseAdmin
     .from("worker_verifications")
     .update(patch)
     .eq("id", verificationId)
@@ -557,6 +603,24 @@ export async function setApplicationStatus(adminUserId: string, verificationId: 
   });
 
   if (input.status === "approved") {
+    const updatedTrade = await processTradeAdoptionOrAssignment(
+      verificationId,
+      data.trade_category,
+      input.adopt_trade,
+      input.adopt_category_id,
+      input.assigned_trade
+    );
+
+    if (updatedTrade !== data.trade_category) {
+      const { data: refreshed } = await supabaseAdmin
+        .from("worker_verifications")
+        .update({ trade_category: updatedTrade })
+        .eq("id", verificationId)
+        .select()
+        .single();
+      data = refreshed;
+    }
+
     await syncApprovedVerificationToAccount(data);
   }
 
@@ -580,7 +644,7 @@ export async function setApplicationStatusByPortalAdmin(verificationId: string, 
   if (input.admin_notes) patch.admin_notes = input.admin_notes;
   if (input.more_info_message) patch.more_info_message = input.more_info_message;
 
-  const { data, error } = await supabaseAdmin
+  let { data, error } = await supabaseAdmin
     .from("worker_verifications")
     .update(patch)
     .eq("id", verificationId)
@@ -598,6 +662,24 @@ export async function setApplicationStatusByPortalAdmin(verificationId: string, 
   });
 
   if (input.status === "approved") {
+    const updatedTrade = await processTradeAdoptionOrAssignment(
+      verificationId,
+      data.trade_category,
+      input.adopt_trade,
+      input.adopt_category_id,
+      input.assigned_trade
+    );
+
+    if (updatedTrade !== data.trade_category) {
+      const { data: refreshed } = await supabaseAdmin
+        .from("worker_verifications")
+        .update({ trade_category: updatedTrade })
+        .eq("id", verificationId)
+        .select()
+        .single();
+      data = refreshed;
+    }
+
     await syncApprovedVerificationToAccount(data);
   }
 

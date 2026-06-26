@@ -115,7 +115,7 @@ export async function updateSubcategory(subcategoryId: string, body: unknown) {
 export async function listAccounts(query: { q?: string; status?: string; role?: string }) {
   let request = supabaseAdmin
     .from("profiles")
-    .select("id, full_name, phone, role, signup_type, last_active_mode, avatar_url, account_status, suspended_at, suspension_reason, created_at, updated_at, workers(id, is_available, is_verified, rating, total_jobs, skills, service_areas)")
+    .select("id, full_name, phone, signup_type, last_active_mode, avatar_url, account_status, suspended_at, suspension_reason, created_at, updated_at, workers(id, is_available, is_verified, rating, total_jobs, skills, service_areas)")
     .order("created_at", { ascending: false })
     .limit(200);
 
@@ -124,7 +124,7 @@ export async function listAccounts(query: { q?: string; status?: string; role?: 
   }
 
   if (query.role === "client" || query.role === "worker") {
-    request = request.or(`signup_type.eq.${query.role},role.eq.${query.role},last_active_mode.eq.${query.role}`);
+    request = request.or(`signup_type.eq.${query.role},last_active_mode.eq.${query.role}`);
   }
 
   if (query.q?.trim() && !query.q.includes("@")) {

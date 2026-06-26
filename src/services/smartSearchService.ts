@@ -64,26 +64,15 @@ async function parseWithGemini(query: string): Promise<ParsedIntent> {
 Your task is to parse a natural language query — which could be a client's search intent (e.g., "fix my sink", "need a painter") OR an artisan's described skills/trades (e.g., "I do house wiring and fix generators", "cabinet maker") — and output a structured JSON representing the matched categories and a refined summary of the query.
 
 Here are the available service categories and their slugs:
-- Plumbing (slug: plumbing): Leak repair, Installation, Drainage & septic
-- Electrical (slug: electrical): Wiring, Repairs, Generator & inverter
-- Carpentry (slug: carpentry): Furniture, Frames & doors, Cabinets & wardrobes
-- Masonry & Blockwork (slug: masonry): Block laying, Plastering, Concrete repair
-- Welding & Fabrication (slug: welding): Metal gates, Burglar proofing, Fabrication repair
-- Construction & Renovation (slug: construction): Renovation, Structural repair, Site labour
-- Automotive & Small Engine (slug: automotive): Car mechanic, Motorbike repair, Auto body & spraying
-- Painting (slug: painting): Interior, Exterior, Decorative finish
-- Tiling & Flooring (slug: tiling): Floor tiling, Wall tiling, Terrazzo & floor finish
-- Roofing & Ceiling (slug: roofing): Roof installation, Ceiling work, Roof leak repair
-- HVAC & Refrigeration (slug: hvac): AC service, Refrigeration, Ventilation
-- Appliance & Electronics Repair (slug: appliance_repair): Kitchen appliances, Laundry appliances, Electronics repair
-- Cleaning (slug: cleaning): Deep clean, Move-in/out, Fumigation & pest control
-- Landscaping (slug: landscaping): Lawn care, Garden design, Compound cleanup
-- Fashion & Dressmaking (slug: fashion): Dressmaking, Alterations, School & work uniforms, Shoemaking & shoe repair (cobbler), Leatherwork & footwear
-- Hair & Beauty (slug: beauty): Hairdressing, Barbering, Makeup & nails
-- Catering & Events (slug: catering): Home cooking, Baking, Event catering, Butcher & meat preparation, Animal slaughtering
-- Upholstery (slug: upholstery): Sofa repair, Curtains & blinds, Cushions & covers
-- Security & Locksmith (slug: security): Locksmith, Burglar proofing, CCTV & access
-- ICT & Device Support (slug: ict_support): Computer repair, Phone repair, Network setup
+- Construction & Building (slug: construction_building): Mason, Carpenter, Tiler, Painter, Steel Bender, Welder / Metal Fabricator, Ceiling Installer, Glass Worker, Roofer, Paver / Landscaper
+- Electrical & Power (slug: electrical_power): Electrician, Solar Technician, Appliance Electrician, Generator Technician, CCTV / Security Installer
+- Plumbing & Water Systems (slug: plumbing_water): Plumber, Borehole / Pump Technician, Drainage Worker, Sanitary Installer
+- Auto & Mechanical Repairs (slug: auto_mechanical): Auto Mechanic, Auto Electrician, Vulcanizer, Sprayer / Auto Body Worker, Motorcycle Mechanic, Heavy Equipment Mechanic
+- Home Repairs & Maintenance (slug: home_repairs): General Handyman, Furniture Repairer, Door/Window Repairer, Pest Control Worker, Cleaner, Gardener
+- Beauty, Fashion & Personal Services (slug: beauty_fashion): Hairdresser, Barber, Makeup Artist, Tailor / Dressmaker, Shoemaker / Cobbler, Bead Maker, Milliner
+- Electronics, Phones & IT Repairs (slug: electronics_it): Phone Repairer, Laptop Technician, TV Technician, Sound System Technician, Printer/Photocopier Technician
+- Hospitality & Event Services (slug: hospitality_events): Caterer, Baker, Decorator, Photographer, Videographer, DJ / Sound Provider, Canopy/Chair Rental
+- Arts, Craft & Traditional Work (slug: arts_crafts): Potter, Weaver, Wood Carver, Drum Maker, Goldsmith / Jeweller, Brass Smith, Signwriter / Printer
 
 You must return a JSON object with this exact shape:
 {
