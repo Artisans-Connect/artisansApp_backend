@@ -21,3 +21,6 @@ pnpm-debug.log*
 # System files
 .DS_Store
 Thumbs.db
+
+# Generated files
+all_migrations.txt
