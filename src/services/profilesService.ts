@@ -14,6 +14,30 @@ export function hashFcmToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+export function isPlaceholderProfileName(value: unknown): boolean {
+  if (typeof value !== "string") return true;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "" || normalized === "user";
+}
+
+export function isPlaceholderProfilePhone(value: unknown): boolean {
+  if (typeof value !== "string") return true;
+  const normalized = value.trim();
+  return normalized === "" || normalized === "0000000000";
+}
+
+function metadataString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function readAuthProfileMetadata(metadata: Record<string, unknown> | null | undefined) {
+  return {
+    full_name: metadataString(metadata?.full_name) || metadataString(metadata?.name),
+    avatar_url: metadataString(metadata?.avatar_url) || metadataString(metadata?.picture),
+    phone: metadataString(metadata?.phone),
+  };
+}
+
 export async function createProfile(userId: string, body: unknown) {
   const parsed = createProfileSchema.safeParse(body);
   if (!parsed.success) {
@@ -22,14 +46,40 @@ export async function createProfile(userId: string, body: unknown) {
 
   const input = parsed.data;
   const initialMode = input.signup_type;
+  const profileInput = {
+    full_name: input.full_name,
+    phone: input.phone,
+    avatar_url: input.avatar_url ?? null,
+  };
+
+  if (isPlaceholderProfileName(profileInput.full_name) || !profileInput.avatar_url || isPlaceholderProfilePhone(profileInput.phone)) {
+    try {
+      const { data: authData, error: authError } = await supabaseAdmin.auth.admin.getUserById(userId);
+      if (!authError && authData?.user) {
+        const metadata = readAuthProfileMetadata(authData.user.user_metadata || {});
+        if (isPlaceholderProfileName(profileInput.full_name) && metadata.full_name) {
+          profileInput.full_name = metadata.full_name;
+        }
+        if (!profileInput.avatar_url && metadata.avatar_url) {
+          profileInput.avatar_url = metadata.avatar_url;
+        }
+        const phoneFromMeta = authData.user.phone || metadata.phone;
+        if (isPlaceholderProfilePhone(profileInput.phone) && phoneFromMeta) {
+          profileInput.phone = phoneFromMeta;
+        }
+      }
+    } catch (e) {
+      console.error("Error reading auth metadata during profile creation:", e);
+    }
+  }
 
   const { error: profileError } = await supabaseAdmin.from("profiles").insert({
     id: userId,
-    full_name: input.full_name,
-    phone: input.phone,
+    full_name: profileInput.full_name,
+    phone: profileInput.phone,
     signup_type: input.signup_type,
     last_active_mode: initialMode,
-    avatar_url: input.avatar_url ?? null,
+    avatar_url: profileInput.avatar_url,
     bio: input.bio ?? null,
     location_label: input.location_label ?? null,
   });
@@ -71,17 +121,17 @@ export async function getProfile(userId: string) {
   if (!profile) throw appError(404, "Profile not found", "PROFILE_NOT_FOUND");
 
   // Auto-sync Google/Auth Sign-in metadata if fields are empty
-  const hasMissingName = !profile.full_name || profile.full_name.trim() === "";
+  const hasMissingName = isPlaceholderProfileName(profile.full_name);
   const hasMissingAvatar = !profile.avatar_url;
-  const hasMissingPhone = !profile.phone;
+  const hasMissingPhone = isPlaceholderProfilePhone(profile.phone);
 
   if (hasMissingName || hasMissingAvatar || hasMissingPhone) {
     try {
       const { data: authData, error: authError } = await supabaseAdmin.auth.admin.getUserById(userId);
       if (!authError && authData?.user) {
-        const metadata = authData.user.user_metadata || {};
-        const nameFromMeta = metadata.full_name || metadata.name || "";
-        const avatarFromMeta = metadata.avatar_url || metadata.picture || "";
+        const metadata = readAuthProfileMetadata(authData.user.user_metadata || {});
+        const nameFromMeta = metadata.full_name;
+        const avatarFromMeta = metadata.avatar_url;
         const phoneFromMeta = authData.user.phone || metadata.phone || "";
 
         const updates: Record<string, any> = {};
@@ -378,4 +428,84 @@ export async function deleteGalleryPhoto(userId: string, url: string) {
 
   return getProfile(userId);
 }
+
+export async function deleteAccount(userId: string) {
+  // 1. Delete storage files
+  const buckets = ["avatars", "completion-photos", "job-photos", "chat-media", "verification-docs"];
+  for (const bucket of buckets) {
+    try {
+      const { data: files, error: listError } = await supabaseAdmin.storage.from(bucket).list(userId);
+      if (listError) {
+        console.error(`Error listing files in bucket ${bucket} for user ${userId}:`, listError);
+        continue;
+      }
+      if (files && files.length > 0) {
+        const paths = files.map(file => `${userId}/${file.name}`);
+        const { error: removeError } = await supabaseAdmin.storage.from(bucket).remove(paths);
+        if (removeError) {
+          console.error(`Error removing files in bucket ${bucket} for user ${userId}:`, removeError);
+        }
+      }
+    } catch (e) {
+      console.error(`Exception while deleting storage for user ${userId} in bucket ${bucket}:`, e);
+    }
+  }
+
+  // 2. Delete reviews where user is reviewer or worker
+  const { error: reviewsError } = await supabaseAdmin
+    .from("reviews")
+    .delete()
+    .or(`reviewer_id.eq.${userId},worker_id.eq.${userId}`);
+  if (reviewsError) {
+    console.error(`Error deleting reviews for user ${userId}:`, reviewsError);
+  }
+
+  // 3. Delete messages where user is sender
+  const { error: messagesError } = await supabaseAdmin
+    .from("messages")
+    .delete()
+    .eq("sender_id", userId);
+  if (messagesError) {
+    console.error(`Error deleting messages for user ${userId}:`, messagesError);
+  }
+
+  // 4. Find all jobs and delete job cancellations
+  const { data: jobs, error: fetchJobsError } = await supabaseAdmin
+    .from("jobs")
+    .select("id")
+    .or(`client_id.eq.${userId},worker_id.eq.${userId}`);
+  
+  if (fetchJobsError) {
+    console.error(`Error fetching jobs for user ${userId}:`, fetchJobsError);
+  }
+
+  if (jobs && jobs.length > 0) {
+    const jobIds = jobs.map((job) => job.id);
+    const { error: cancellationsError } = await supabaseAdmin
+      .from("job_cancellations")
+      .delete()
+      .in("job_id", jobIds);
+    if (cancellationsError) {
+      console.error(`Error deleting job cancellations for user ${userId}:`, cancellationsError);
+    }
+  }
+
+  // 5. Delete jobs
+  const { error: jobsDeleteError } = await supabaseAdmin
+    .from("jobs")
+    .delete()
+    .or(`client_id.eq.${userId},worker_id.eq.${userId},requested_worker_id.eq.${userId}`);
+  if (jobsDeleteError) {
+    console.error(`Error deleting jobs for user ${userId}:`, jobsDeleteError);
+  }
+
+  // 6. Delete the auth user (cascades to profiles, workers, notifications, etc.)
+  const { error: deleteUserError } = await supabaseAdmin.auth.admin.deleteUser(userId);
+  if (deleteUserError) {
+    throw appError(500, deleteUserError.message, "USER_DELETE_FAILED");
+  }
+
+  return { success: true };
+}
+
 

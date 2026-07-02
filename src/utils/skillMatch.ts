@@ -10,6 +10,43 @@ export const CATEGORY_ALIASES: Record<string, string[]> = {
   arts_crafts: ["arts", "craft", "potter", "weaver", "wood carver", "drum", "goldsmith", "jeweller", "brass smith", "signwriter", "clay", "pot", "kente", "basket", "carving", "sticker", "signboard"],
 };
 
+export type CategoryMatchCatalogItem = {
+  slug: string;
+  name?: string | null;
+  description?: string | null;
+  subcategories?: Array<{
+    slug?: string | null;
+    name?: string | null;
+    description?: string | null;
+  }> | null;
+};
+
+function normalizeLookupText(value: string | null | undefined): string {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/[_/-]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function termsForCatalogCategory(category: CategoryMatchCatalogItem): string[] {
+  const slug = category.slug.trim().toLowerCase();
+  const terms = new Set<string>([
+    normalizeLookupText(slug),
+    normalizeLookupText(category.name),
+    normalizeLookupText(category.description),
+    ...(CATEGORY_ALIASES[slug] ?? []).map(normalizeLookupText),
+  ]);
+
+  for (const subcategory of category.subcategories ?? []) {
+    terms.add(normalizeLookupText(subcategory.slug));
+    terms.add(normalizeLookupText(subcategory.name));
+    terms.add(normalizeLookupText(subcategory.description));
+  }
+
+  return [...terms].filter(Boolean);
+}
+
 export function workerHasCategorySkill(skills: string[] | null | undefined, categoryKey: string): boolean {
   const key = categoryKey.trim().toLowerCase();
   if (!key) return true;
@@ -23,7 +60,10 @@ export function workerHasCategorySkill(skills: string[] | null | undefined, cate
   );
 }
 
-export function findMatchingCategories(query: string): { slug: string; score: number }[] {
+export function findMatchingCategories(
+  query: string,
+  catalog?: readonly CategoryMatchCatalogItem[],
+): { slug: string; score: number }[] {
   const normalizedQuery = query.toLowerCase().trim();
   if (!normalizedQuery) return [];
 
@@ -36,8 +76,11 @@ export function findMatchingCategories(query: string): { slug: string; score: nu
     .filter((t) => t.length > 0 && !stopwords.has(t));
 
   const results: { slug: string; score: number }[] = [];
+  const entries = catalog?.length
+    ? catalog.map((category) => [category.slug, termsForCatalogCategory(category)] as const)
+    : Object.entries(CATEGORY_ALIASES);
 
-  for (const [slug, aliases] of Object.entries(CATEGORY_ALIASES)) {
+  for (const [slug, aliases] of entries) {
     let score = 0;
     for (const token of tokens) {
       for (const alias of aliases) {
@@ -57,4 +100,3 @@ export function findMatchingCategories(query: string): { slug: string; score: nu
 
   return results.sort((a, b) => b.score - a.score);
 }
-

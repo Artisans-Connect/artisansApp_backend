@@ -2,7 +2,13 @@ import { supabaseAdmin } from "../config/supabase";
 import { JOB_MODE, JOB_STATUS, MATCHING, CANCELLATION_STAGE, CANCELLATION_FEES } from "../constants/enums";
 import { appError } from "../utils/appError";
 import { haversineKm } from "../utils/haversine";
-import { completeJobSchema, createJobSchema, initialJobStatus } from "../validators/jobs.validator";
+import { completeJobSchema, createJobSchema } from "../validators/jobs.validator";
+import {
+  WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
+  isWorkerActiveJobConstraintError,
+  shouldDispatchJobOnCreate,
+  statusForNewJob,
+} from "./jobLifecycle";
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
 
@@ -39,6 +45,19 @@ async function resolveCategoryId(categoryIdOrSlug: string) {
   return data.id as string;
 }
 
+async function ensureRequestedWorkerCanReceiveImmediateRequest(workerId: string) {
+  const { count, error } = await supabaseAdmin
+    .from("jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("worker_id", workerId)
+    .in("status", [...WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES]);
+
+  if (error) throw appError(500, error.message, "ACTIVE_JOB_CHECK_FAILED");
+  if ((count ?? 0) > 0) {
+    throw appError(409, "This worker is currently busy with another job", "WORKER_HAS_ACTIVE_JOB");
+  }
+}
+
 export async function createJob(userId: string, body: unknown, idempotencyKeyHeader?: string) {
   const parsed = createJobSchema.safeParse(body);
   if (!parsed.success) {
@@ -56,7 +75,14 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
 
   const input = parsed.data;
   const categoryId = await resolveCategoryId(input.category_id);
-  const status = input.requested_worker_id ? JOB_STATUS.MATCHING : initialJobStatus(input.job_mode);
+  const shouldDispatch = shouldDispatchJobOnCreate(input.job_mode, Boolean(input.requested_worker_id));
+  const status = input.requested_worker_id && shouldDispatch
+    ? JOB_STATUS.MATCHING
+    : statusForNewJob(input.job_mode);
+
+  if (input.requested_worker_id && shouldDispatch) {
+    await ensureRequestedWorkerCanReceiveImmediateRequest(input.requested_worker_id);
+  }
 
   const expiresAt =
     input.job_mode === JOB_MODE.ASAP
@@ -103,14 +129,14 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
     }
   }
 
-  if (input.requested_worker_id) {
+  if (input.requested_worker_id && shouldDispatch) {
     await matchingService.dispatchToWorker(data.id, input.requested_worker_id);
     await notifyService.notifyWorkerNewJob(input.requested_worker_id, {
       id: data.id,
       title: data.title,
       address_label: data.address_label,
     });
-  } else if (input.job_mode === JOB_MODE.ASAP) {
+  } else if (shouldDispatch) {
     void matchingService.findAndDispatch(data.id, 1);
   }
 
@@ -474,7 +500,16 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
     .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
     .single();
 
-  if (error) throw appError(500, error.message, "JOB_REOPEN_FAILED");
+  if (error) {
+    if (isWorkerActiveJobConstraintError(error)) {
+      throw appError(
+        409,
+        "This job cannot be reopened because the worker is currently assigned to another active job",
+        "WORKER_HAS_ACTIVE_JOB",
+      );
+    }
+    throw appError(500, error.message, "JOB_REOPEN_FAILED");
+  }
 
   void matchingService.findAndDispatch(jobId, 1);
   return data;
@@ -711,8 +746,8 @@ export async function getJobById(userId: string, jobId: string) {
   if (error) throw appError(500, error.message, "JOB_FETCH_FAILED");
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
 
-  // Only participants can view a job
-  if (job.client_id !== userId && job.worker_id !== userId) {
+  // Only participants, including the requested worker before assignment, can view a job.
+  if (job.client_id !== userId && job.worker_id !== userId && job.requested_worker_id !== userId) {
     throw appError(403, "Not authorized to view this job", "FORBIDDEN");
   }
 

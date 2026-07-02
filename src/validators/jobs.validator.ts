@@ -40,8 +40,8 @@ export const createJobSchema = z
   });
 
 export function initialJobStatus(jobMode: string): string {
-  if (jobMode === JOB_MODE.ASAP) return JOB_STATUS.SEARCHING;
-  return JOB_STATUS.DRAFT;
+  if (jobMode === JOB_MODE.SCHEDULED) return JOB_STATUS.DRAFT;
+  return JOB_STATUS.SEARCHING;
 }
 
 export const completeJobSchema = z.object({

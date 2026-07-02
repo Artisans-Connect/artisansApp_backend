@@ -6,6 +6,10 @@ import { isLocationFresh } from "../utils/locationFreshness";
 import { workerHasCategorySkill } from "../utils/skillMatch";
 import { logger } from "../utils/logger";
 import {
+  SCHEDULED_JOB_ACTIVATION_LEAD_MS,
+  WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
+} from "./jobLifecycle";
+import {
   applyFairnessSlot,
   rankRecommendationCandidates,
   type RecommendationCandidate,
@@ -80,6 +84,7 @@ async function fetchCandidateWorkers(
   radiusKm: number,
 ): Promise<WorkerRow[]> {
   const categoryKey = await fetchCategoryLabel(job.category_id);
+  const occupiedWorkerIds = await fetchWorkerIdsWithBlockingAssignments();
 
   const { data, error } = await supabaseAdmin
     .from("workers")
@@ -90,6 +95,7 @@ async function fetchCandidateWorkers(
 
   return (data ?? []).filter((worker) => {
     if (excludeIds.has(worker.id)) return false;
+    if (occupiedWorkerIds.has(worker.id)) return false;
     if (worker.current_lat == null || worker.current_lng == null) return false;
     if (!isLocationFresh(worker.location_at)) return false;
     if (categoryKey && !workerHasCategorySkill(worker.skills, categoryKey)) {
@@ -98,6 +104,36 @@ async function fetchCandidateWorkers(
     const distance = haversineKm(job.location_lat, job.location_lng, worker.current_lat, worker.current_lng);
     return distance <= radiusKm;
   }) as WorkerRow[];
+}
+
+async function fetchWorkerIdsWithBlockingAssignments(): Promise<Set<string>> {
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .select("worker_id")
+    .not("worker_id", "is", null)
+    .in("status", [...WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES]);
+
+  if (error) {
+    logger(`worker assignment occupancy warning: ${error.message}`);
+    return new Set();
+  }
+
+  return new Set((data ?? []).map((row) => row.worker_id as string).filter(Boolean));
+}
+
+async function workerHasBlockingAssignment(workerId: string): Promise<boolean> {
+  const { count, error } = await supabaseAdmin
+    .from("jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("worker_id", workerId)
+    .in("status", [...WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES]);
+
+  if (error) {
+    logger(`worker assignment check warning: ${error.message}`);
+    return true;
+  }
+
+  return (count ?? 0) > 0;
 }
 
 async function rankWorkers(
@@ -429,6 +465,75 @@ async function getLatestDispatchRound(jobId: string): Promise<number> {
   }
 
   return Number(data?.round ?? 0);
+}
+
+export async function activateDueScheduledJobs(
+  now = new Date(),
+  leadMs = SCHEDULED_JOB_ACTIVATION_LEAD_MS,
+): Promise<void> {
+  const activateBefore = new Date(now.getTime() + leadMs).toISOString();
+  const { data: jobs, error } = await supabaseAdmin
+    .from("jobs")
+    .select("id, title, address_label, requested_worker_id")
+    .eq("status", JOB_STATUS.DRAFT)
+    .eq("job_mode", "scheduled")
+    .lte("scheduled_for", activateBefore);
+
+  if (error) {
+    logger(`scheduled activation fetch warning: ${error.message}`);
+    return;
+  }
+
+  for (const job of jobs ?? []) {
+    const isTargeted = Boolean(job.requested_worker_id);
+    const nextStatus = isTargeted ? JOB_STATUS.MATCHING : JOB_STATUS.SEARCHING;
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from("jobs")
+      .update({ status: nextStatus, updated_at: now.toISOString() })
+      .eq("id", job.id)
+      .eq("status", JOB_STATUS.DRAFT)
+      .select("id, title, address_label, requested_worker_id")
+      .maybeSingle();
+
+    if (updateError) {
+      logger(`scheduled activation update warning: ${updateError.message}`);
+      continue;
+    }
+    if (!updated) continue;
+
+    if (updated.requested_worker_id) {
+      const requestedWorkerBusy = await workerHasBlockingAssignment(updated.requested_worker_id);
+      if (requestedWorkerBusy) {
+        const { data: fallbackJob, error: fallbackError } = await supabaseAdmin
+          .from("jobs")
+          .update({
+            status: JOB_STATUS.SEARCHING,
+            requested_worker_id: null,
+            updated_at: now.toISOString(),
+          })
+          .eq("id", updated.id)
+          .eq("status", JOB_STATUS.MATCHING)
+          .select("id")
+          .maybeSingle();
+
+        if (fallbackError) {
+          logger(`scheduled activation fallback warning: ${fallbackError.message}`);
+          continue;
+        }
+        if (fallbackJob) void findAndDispatch(updated.id, 1);
+        continue;
+      }
+
+      await dispatchToWorker(updated.id, updated.requested_worker_id);
+      await notifyService.notifyWorkerNewJob(updated.requested_worker_id, {
+        id: updated.id,
+        title: updated.title,
+        address_label: updated.address_label,
+      });
+    } else {
+      void findAndDispatch(updated.id, 1);
+    }
+  }
 }
 
 export async function expireStaleJobs(): Promise<void> {

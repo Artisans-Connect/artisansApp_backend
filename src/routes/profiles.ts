@@ -24,6 +24,7 @@ router.get(
   }),
 );
 
+
 router.put(
   "/me",
   authMiddleware,
@@ -32,6 +33,16 @@ router.put(
     res.status(200).json({ success: true, data: profile });
   }),
 );
+
+router.delete(
+  "/me",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await profilesService.deleteAccount(req.user!.id);
+    res.status(200).json(result);
+  }),
+);
+
 
 router.patch(
   "/me/mode",

@@ -1,6 +1,10 @@
-import { JOB_STATUS } from "../constants/enums";
+import { JOB_STATUS, JOB_MODE } from "../constants/enums";
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
+import {
+  WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
+  isWorkerActiveJobConstraintError,
+} from "./jobLifecycle";
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
 
@@ -21,7 +25,27 @@ function readApplicationInput(body?: ApplyToJobInput) {
   };
 }
 
+async function ensureWorkerHasNoActiveJob(workerId: string, currentJobId?: string) {
+  let query = supabaseAdmin
+    .from("jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("worker_id", workerId)
+    .in("status", [...WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES]);
+
+  if (currentJobId) {
+    query = query.neq("id", currentJobId);
+  }
+
+  const { count, error } = await query;
+  if (error) throw appError(500, error.message, "ACTIVE_JOB_CHECK_FAILED");
+  if ((count ?? 0) > 0) {
+    throw appError(409, "This worker already has an active or approval-pending job", "WORKER_HAS_ACTIVE_JOB");
+  }
+}
+
 export async function applyToJob(workerId: string, jobId: string, body?: ApplyToJobInput) {
+  await ensureWorkerHasNoActiveJob(workerId);
+
   const { data: dispatch } = await supabaseAdmin
     .from("job_dispatches")
     .select("job_id")
@@ -118,14 +142,34 @@ export async function listWorkerApplications(workerId: string) {
   const { data, error } = await supabaseAdmin
     .from("job_applications")
     .select(
-      "id, job_id, worker_id, status, message, proposed_rate, created_at, job:jobs!job_applications_job_id_fkey(id, title, status, address_label, budget_fixed, budget_min, budget_max, created_at, categories(name))",
+      "id, job_id, worker_id, status, message, proposed_rate, created_at, job:jobs!job_applications_job_id_fkey(id, title, status, address_label, budget_fixed, budget_min, budget_max, created_at, categories(name, icon_name, color_hex))",
     )
     .eq("worker_id", workerId)
     .in("status", ["pending", "accepted"])
     .order("created_at", { ascending: false });
 
   if (error) throw appError(500, error.message, "WORKER_APPLICATIONS_FETCH_FAILED");
-  return data ?? [];
+  const terminalJobStatuses = new Set<string>([
+    JOB_STATUS.EXPIRED,
+    JOB_STATUS.CANCELLED,
+    JOB_STATUS.COMPLETED,
+  ]);
+  const openApplicationJobStatuses = new Set<string>([
+    JOB_STATUS.SEARCHING,
+    JOB_STATUS.MATCHING,
+  ]);
+
+  return (data ?? []).filter((application) => {
+    const job = Array.isArray(application.job) ? application.job[0] : application.job;
+    const jobStatus = typeof job?.status === "string" ? job.status : "";
+    if (terminalJobStatuses.has(jobStatus)) {
+      return false;
+    }
+    if (application.status === "pending") {
+      return openApplicationJobStatuses.has(jobStatus);
+    }
+    return true;
+  });
 }
 
 export async function acceptApplication(clientId: string, jobId: string, applicationId: string) {
@@ -152,6 +196,7 @@ export async function acceptApplication(clientId: string, jobId: string, applica
   if (![JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status) || job.worker_id) {
     throw appError(409, "Job is no longer accepting applicants", "INVALID_JOB_STATE");
   }
+  await ensureWorkerHasNoActiveJob(application.worker_id, jobId);
 
   const now = new Date().toISOString();
   const { data: updatedJob, error: updateError } = await supabaseAdmin
@@ -164,7 +209,12 @@ export async function acceptApplication(clientId: string, jobId: string, applica
     .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
     .maybeSingle();
 
-  if (updateError) throw appError(500, updateError.message, "JOB_ASSIGN_FAILED");
+  if (updateError) {
+    if (isWorkerActiveJobConstraintError(updateError)) {
+      throw appError(409, "This worker already has an active or approval-pending job", "WORKER_HAS_ACTIVE_JOB");
+    }
+    throw appError(500, updateError.message, "JOB_ASSIGN_FAILED");
+  }
   if (!updatedJob) throw appError(409, "Job is no longer available", "JOB_ALREADY_TAKEN");
 
   const { error: acceptStatusError } = await supabaseAdmin
@@ -185,6 +235,13 @@ export async function acceptApplication(clientId: string, jobId: string, applica
   await matchingService.markDispatchAccepted(jobId, application.worker_id);
   await matchingService.markDispatchesExpired(jobId, application.worker_id);
   await notifyService.notifyWorkerApplicationAccepted(application.worker_id, jobId);
+
+  if (updatedJob && updatedJob.job_mode === JOB_MODE.ASAP) {
+    await supabaseAdmin
+      .from("workers")
+      .update({ is_available: false, updated_at: now })
+      .eq("id", application.worker_id);
+  }
 
   return updatedJob;
 }

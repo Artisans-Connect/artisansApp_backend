@@ -12,8 +12,8 @@ const DISTANCE_RATE_PER_KM = 3.0; // GH₵ per km
 const URGENCY_PREMIUM_PERCENT = 0.20; // +20% for ASAP
 const VERIFICATION_PREMIUM_PERCENT = 0.15; // +15% for verified clients
 const VERIFIED_WORKER_MARKET_PREMIUM_PERCENT = 0.08; // +8% when verified supply exists nearby
-const ABSOLUTE_MINIMUM_FEE = 50; // Floor in GH₵
-const DEFAULT_BASE_FEE = 80; // Fallback if category has no base_fee
+const ABSOLUTE_MINIMUM_FEE = 40; // Floor in GH₵
+const DEFAULT_BASE_FEE = 60; // Fallback if category has no base_fee
 
 export interface FeeBreakdown {
   base_service_fee: number;

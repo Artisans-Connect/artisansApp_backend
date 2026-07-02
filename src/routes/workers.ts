@@ -7,6 +7,15 @@ import { paramId } from "../utils/routeParams";
 
 const router = Router();
 
+router.get(
+  "/availability",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const availability = await workersService.getAvailability(req.user!.id);
+    res.status(200).json({ success: true, data: availability });
+  }),
+);
+
 router.put(
   "/location",
   authMiddleware,

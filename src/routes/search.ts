@@ -16,22 +16,34 @@ router.post(
       throw appError(400, "Query string is required in request body", "VALIDATION_ERROR");
     }
 
-    const intent = await smartSearchService.parseSearchIntent(query);
+    const { data: activeCategories, error: categoriesError } = await supabaseAdmin
+      .from("categories")
+      .select("id, name, slug, description, subcategories(name, slug, description)")
+      .eq("is_active", true);
+
+    if (categoriesError) {
+      console.error("Failed to load search catalog:", categoriesError.message);
+    }
+
+    const catalog = (activeCategories ?? []).map((category) => ({
+      slug: category.slug,
+      name: category.name,
+      description: category.description,
+      subcategories: category.subcategories,
+    }));
+
+    const intent = await smartSearchService.parseSearchIntent(query, catalog);
 
     // Resolve slugs to full category DB records
     let resolvedCategories: { id: string; name: string; slug: string }[] = [];
     if (intent.categories.length > 0) {
-      const { data, error } = await supabaseAdmin
-        .from("categories")
-        .select("id, name, slug")
-        .in("slug", intent.categories)
-        .eq("is_active", true);
-
-      if (error) {
-        console.error("Failed to resolve category slugs:", error.message);
-      } else if (data) {
-        resolvedCategories = data;
-      }
+      resolvedCategories = (activeCategories ?? [])
+        .filter((category) => intent.categories.includes(category.slug))
+        .map((category) => ({
+          id: category.id,
+          name: category.name,
+          slug: category.slug,
+        }));
     }
 
     res.status(200).json({
