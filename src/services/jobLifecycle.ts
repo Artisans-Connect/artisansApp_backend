@@ -15,6 +15,8 @@ export const WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES = [
   JOB_STATUS.PENDING_CLIENT_APPROVAL,
 ] as const;
 
+export const WORKER_RECOVERABLE_JOB_STATUSES = WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES;
+
 export const WORKER_ACTIVE_JOB_CONSTRAINT_NAME = "one_active_worker_job_per_worker";
 
 export function statusForNewJob(jobMode: string): string {
@@ -51,4 +53,20 @@ export function isWorkerActiveJobConstraintError(error: unknown): boolean {
   const err = error as { code?: string; message?: string; details?: string; hint?: string };
   const text = `${err.message ?? ""} ${err.details ?? ""} ${err.hint ?? ""}`;
   return err.code === "23505" && text.includes(WORKER_ACTIVE_JOB_CONSTRAINT_NAME);
+}
+
+export function buildReopenAfterWorkerCancelPatch(updatedAt: string, expiresAt: string | null) {
+  return {
+    status: JOB_STATUS.MATCHING,
+    worker_id: null,
+    requested_worker_id: null,
+    cancelled_by: null,
+    cancelled_reason: null,
+    cancelled_at: null,
+    cancellation_stage: null,
+    cancellation_fee: 0,
+    cancellation_fee_currency: "GHS",
+    expires_at: expiresAt,
+    updated_at: updatedAt,
+  };
 }

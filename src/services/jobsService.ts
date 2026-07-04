@@ -4,6 +4,7 @@ import { appError } from "../utils/appError";
 import { haversineKm } from "../utils/haversine";
 import { completeJobSchema, createJobSchema } from "../validators/jobs.validator";
 import {
+  buildReopenAfterWorkerCancelPatch,
   WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
   isWorkerActiveJobConstraintError,
   shouldDispatchJobOnCreate,
@@ -283,6 +284,14 @@ async function incrementClientCancelCount(clientId: string) {
   }
 }
 
+async function releaseWorkerAfterTerminalJob(workerId: string | null | undefined) {
+  if (!workerId) return;
+  await supabaseAdmin
+    .from("workers")
+    .update({ is_available: true, updated_at: new Date().toISOString() })
+    .eq("id", workerId);
+}
+
 /* ── Cancel / Preview / Termination ───────────────────────── */
 
 export async function cancelJob(userId: string, jobId: string, body: unknown) {
@@ -360,6 +369,7 @@ export async function cancelJob(userId: string, jobId: string, body: unknown) {
       feeResult.amount,
     );
   }
+  await releaseWorkerAfterTerminalJob(job.worker_id);
 
   return data;
 }
@@ -434,6 +444,7 @@ export async function requestTermination(userId: string, jobId: string, body: un
   const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
   if (job.client_id !== userId) throw appError(403, "Not allowed", "FORBIDDEN");
+  if (job.status === JOB_STATUS.TERMINATION_REQUESTED) return job;
   if (job.status !== JOB_STATUS.IN_PROGRESS) {
     throw appError(409, "Termination can only be requested for jobs in progress", "INVALID_JOB_STATE");
   }
@@ -467,6 +478,7 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
   const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
   if (job.client_id !== userId) throw appError(403, "Not allowed to reopen this job", "FORBIDDEN");
+  if ([JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status) && !job.worker_id) return job;
   if (job.status !== JOB_STATUS.CANCELLED || job.cancelled_by !== "worker") {
     throw appError(409, "You can request another worker only after the assigned worker cancels", "INVALID_JOB_STATE");
   }
@@ -487,15 +499,7 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
 
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .update({
-      status: JOB_STATUS.MATCHING,
-      worker_id: null,
-      cancelled_by: null,
-      cancelled_reason: null,
-      cancelled_at: null,
-      expires_at: expiresAt,
-      updated_at: new Date().toISOString(),
-    })
+    .update(buildReopenAfterWorkerCancelPatch(new Date().toISOString(), expiresAt))
     .eq("id", jobId)
     .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
     .single();
@@ -531,6 +535,7 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
   if (job.worker_id !== userId) {
     throw appError(403, "Only the assigned worker can submit completion", "FORBIDDEN");
   }
+  if (job.status === JOB_STATUS.PENDING_CLIENT_APPROVAL) return job;
   if (job.status !== JOB_STATUS.IN_PROGRESS) {
     throw appError(409, "Job must be in progress before completion", "INVALID_JOB_STATE");
   }
@@ -642,6 +647,7 @@ export async function approveCompletion(userId: string, jobId: string) {
 
   if (error) throw appError(500, error.message, "JOB_APPROVE_COMPLETION_FAILED");
   matchingService.clearDispatchState(jobId);
+  await releaseWorkerAfterTerminalJob(job.worker_id);
   return data;
 }
 

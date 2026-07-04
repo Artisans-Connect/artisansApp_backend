@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "../config/supabase";
 import { env } from "../config/env";
 import { JOB_STATUS, CANCELLATION_STAGE } from "../constants/enums";
-import { ACTIVE_WORKER_JOB_STATUSES } from "./jobLifecycle";
+import { ACTIVE_WORKER_JOB_STATUSES, WORKER_RECOVERABLE_JOB_STATUSES } from "./jobLifecycle";
 import { haversineKm } from "../utils/haversine";
 import { appError } from "../utils/appError";
 import { workerHasCategorySkill } from "../utils/skillMatch";
@@ -205,7 +205,7 @@ export async function getActiveJob(userId: string) {
     .from("jobs")
     .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
     .eq("worker_id", userId)
-    .in("status", ACTIVE_WORKER_JOB_STATUSES)
+    .in("status", WORKER_RECOVERABLE_JOB_STATUSES)
     .order("updated_at", { ascending: false })
     .maybeSingle();
 
@@ -319,6 +319,7 @@ export async function cancelAssignedJob(userId: string, jobId: string, body: unk
   matchingService.clearDispatchState(jobId);
   await matchingService.markWorkerCancelledDispatch(jobId, userId);
   await notifyService.notifyWorkerCancelledJob(data.client_id, jobId);
+  await setWorkerAvailabilityAfterTerminalJob(userId, false);
   return data;
 }
 
@@ -356,6 +357,7 @@ export async function respondToTermination(userId: string, jobId: string, body: 
 
     matchingService.clearDispatchState(jobId);
     await notifyService.notifyTerminationResolved(job.client_id, jobId, true);
+    await setWorkerAvailabilityAfterTerminalJob(userId, true);
     return data;
   } else {
     const { data, error } = await supabaseAdmin
@@ -612,6 +614,13 @@ function compareWorkersWithoutDistance(a: NearbyWorker, b: NearbyWorker): number
     Number(b.rating ?? 0) - Number(a.rating ?? 0) ||
     Number(b.total_jobs ?? 0) - Number(a.total_jobs ?? 0)
   );
+}
+
+async function setWorkerAvailabilityAfterTerminalJob(workerId: string, isAvailable: boolean) {
+  await supabaseAdmin
+    .from("workers")
+    .update({ is_available: isAvailable, updated_at: new Date().toISOString() })
+    .eq("id", workerId);
 }
 
 export async function verifyMeForDemo(userId: string) {

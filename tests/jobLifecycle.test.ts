@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildReopenAfterWorkerCancelPatch,
   isActiveWorkerJobStatus,
   isWorkerAssignmentBlockingStatus,
   shouldActivateScheduledJob,
@@ -58,4 +59,23 @@ test("assignment blocking includes approval-pending jobs to prevent reopen doubl
   for (const status of ["searching", "matching", "completed", "cancelled"]) {
     assert.equal(isWorkerAssignmentBlockingStatus(status), false);
   }
+});
+
+test("reopening after worker cancellation clears stale assignment and cancellation fields", () => {
+  const patch = buildReopenAfterWorkerCancelPatch(
+    "2026-07-04T12:00:00.000Z",
+    "2026-07-04T12:45:00.000Z",
+  );
+
+  assert.equal(patch.status, "matching");
+  assert.equal(patch.worker_id, null);
+  assert.equal(patch.requested_worker_id, null);
+  assert.equal(patch.cancelled_by, null);
+  assert.equal(patch.cancelled_reason, null);
+  assert.equal(patch.cancelled_at, null);
+  assert.equal(patch.cancellation_stage, null);
+  assert.equal(patch.cancellation_fee, 0);
+  assert.equal(patch.cancellation_fee_currency, "GHS");
+  assert.equal(patch.expires_at, "2026-07-04T12:45:00.000Z");
+  assert.equal(patch.updated_at, "2026-07-04T12:00:00.000Z");
 });
