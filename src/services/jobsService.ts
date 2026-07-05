@@ -6,6 +6,7 @@ import { completeJobSchema, createJobSchema } from "../validators/jobs.validator
 import {
   buildReopenAfterWorkerCancelPatch,
   WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
+  isRecoverableServiceInterruption,
   isWorkerActiveJobConstraintError,
   shouldDispatchJobOnCreate,
   statusForNewJob,
@@ -479,8 +480,12 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
   if (job.client_id !== userId) throw appError(403, "Not allowed to reopen this job", "FORBIDDEN");
   if ([JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status) && !job.worker_id) return job;
-  if (job.status !== JOB_STATUS.CANCELLED || job.cancelled_by !== "worker") {
-    throw appError(409, "You can request another worker only after the assigned worker cancels", "INVALID_JOB_STATE");
+  if (!isRecoverableServiceInterruption(job.status, job.cancelled_by, job.cancellation_stage)) {
+    throw appError(
+      409,
+      "You can request another worker only after a recoverable service interruption",
+      "INVALID_JOB_STATE",
+    );
   }
 
   const expiresAt =

@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   buildReopenAfterWorkerCancelPatch,
   isActiveWorkerJobStatus,
+  isRedispatchBlockingDispatchStatus,
+  isRecoverableServiceInterruption,
   isWorkerAssignmentBlockingStatus,
   shouldActivateScheduledJob,
   shouldDispatchJobOnCreate,
@@ -78,4 +80,28 @@ test("reopening after worker cancellation clears stale assignment and cancellati
   assert.equal(patch.cancellation_fee_currency, "GHS");
   assert.equal(patch.expires_at, "2026-07-04T12:45:00.000Z");
   assert.equal(patch.updated_at, "2026-07-04T12:00:00.000Z");
+});
+
+test("recoverable service interruptions can re-enter worker search", () => {
+  assert.equal(isRecoverableServiceInterruption("cancelled", "worker", null), true);
+  assert.equal(
+    isRecoverableServiceInterruption("cancelled", "client", "termination_requested"),
+    true,
+  );
+});
+
+test("ordinary terminal cancellations cannot re-enter worker search", () => {
+  assert.equal(isRecoverableServiceInterruption("cancelled", "client", "free"), false);
+  assert.equal(isRecoverableServiceInterruption("cancelled", "client", null), false);
+  assert.equal(isRecoverableServiceInterruption("completed", "worker", null), false);
+});
+
+test("only active dispatches block a worker from renewed redispatch", () => {
+  for (const status of ["sent", "seen", "accepted"]) {
+    assert.equal(isRedispatchBlockingDispatchStatus(status), true);
+  }
+
+  for (const status of ["declined", "expired", "cancelled", "withdrawn", null]) {
+    assert.equal(isRedispatchBlockingDispatchStatus(status), false);
+  }
 });

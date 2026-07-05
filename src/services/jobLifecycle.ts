@@ -19,6 +19,8 @@ export const WORKER_RECOVERABLE_JOB_STATUSES = WORKER_ASSIGNMENT_BLOCKING_JOB_ST
 
 export const WORKER_ACTIVE_JOB_CONSTRAINT_NAME = "one_active_worker_job_per_worker";
 
+export const REDISPATCH_BLOCKING_DISPATCH_STATUSES = ["sent", "seen", "accepted"] as const;
+
 export function statusForNewJob(jobMode: string): string {
   return jobMode === JOB_MODE.SCHEDULED ? JOB_STATUS.DRAFT : JOB_STATUS.SEARCHING;
 }
@@ -53,6 +55,21 @@ export function isWorkerActiveJobConstraintError(error: unknown): boolean {
   const err = error as { code?: string; message?: string; details?: string; hint?: string };
   const text = `${err.message ?? ""} ${err.details ?? ""} ${err.hint ?? ""}`;
   return err.code === "23505" && text.includes(WORKER_ACTIVE_JOB_CONSTRAINT_NAME);
+}
+
+export function isRecoverableServiceInterruption(
+  status: string | null | undefined,
+  cancelledBy: string | null | undefined,
+  cancellationStage: string | null | undefined,
+): boolean {
+  if (status !== JOB_STATUS.CANCELLED) return false;
+  return cancelledBy === "worker" || cancellationStage === "termination_requested";
+}
+
+export function isRedispatchBlockingDispatchStatus(status: string | null | undefined): boolean {
+  return REDISPATCH_BLOCKING_DISPATCH_STATUSES.includes(
+    status as (typeof REDISPATCH_BLOCKING_DISPATCH_STATUSES)[number],
+  );
 }
 
 export function buildReopenAfterWorkerCancelPatch(updatedAt: string, expiresAt: string | null) {

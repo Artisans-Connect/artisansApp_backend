@@ -319,7 +319,7 @@ export async function cancelAssignedJob(userId: string, jobId: string, body: unk
   matchingService.clearDispatchState(jobId);
   await matchingService.markWorkerCancelledDispatch(jobId, userId);
   await notifyService.notifyWorkerCancelledJob(data.client_id, jobId);
-  await setWorkerAvailabilityAfterTerminalJob(userId, false);
+  await setWorkerAvailabilityAfterTerminalJob(userId, true);
   return data;
 }
 

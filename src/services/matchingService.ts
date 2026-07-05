@@ -6,6 +6,7 @@ import { isLocationFresh } from "../utils/locationFreshness";
 import { workerHasCategorySkill } from "../utils/skillMatch";
 import { logger } from "../utils/logger";
 import {
+  REDISPATCH_BLOCKING_DISPATCH_STATUSES,
   SCHEDULED_JOB_ACTIVATION_LEAD_MS,
   WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
 } from "./jobLifecycle";
@@ -201,10 +202,10 @@ async function recordDispatches(
     status: "sent",
     expires_at: expiresAt,
     notified_at: now.toISOString(),
+    responded_at: null,
   }));
   const { error } = await supabaseAdmin.from("job_dispatches").upsert(rows, {
     onConflict: "job_id,worker_id,round",
-    ignoreDuplicates: true,
   });
   if (error) logger(`job_dispatches insert warning: ${error.message}`);
 }
@@ -225,17 +226,21 @@ export async function dispatchToWorker(
       status: "sent",
       expires_at: new Date(now.getTime() + MATCHING.ROUND_TIMEOUT_MS).toISOString(),
       notified_at: now.toISOString(),
+      responded_at: null,
     },
     {
       onConflict: "job_id,worker_id,round",
-      ignoreDuplicates: true,
     },
   );
   if (error) logger(`targeted job_dispatch insert warning: ${error.message}`);
 }
 
 async function getDispatchedWorkerIds(jobId: string): Promise<Set<string>> {
-  const { data, error } = await supabaseAdmin.from("job_dispatches").select("worker_id").eq("job_id", jobId);
+  const { data, error } = await supabaseAdmin
+    .from("job_dispatches")
+    .select("worker_id")
+    .eq("job_id", jobId)
+    .in("status", [...REDISPATCH_BLOCKING_DISPATCH_STATUSES]);
   if (error) {
     logger(`job_dispatches exclude warning: ${error.message}`);
     return new Set();
