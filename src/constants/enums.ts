@@ -3,6 +3,8 @@ export const JOB_STATUS = {
   SEARCHING: "searching",
   MATCHING: "matching",
   MATCHED: "matched",
+  /** Worker accepted a scheduled job; does NOT block other work until activation. */
+  SCHEDULED_CONFIRMED: "scheduled_confirmed",
   ON_THE_WAY: "on_the_way",
   ARRIVED: "arrived",
   IN_PROGRESS: "in_progress",
@@ -28,6 +30,17 @@ export const MATCHING = {
   LOCATION_STALE_MS: 15 * 60 * 1000,
   /** ASAP jobs: DB cron safety net via expires_at */
   JOB_EXPIRES_MINUTES: 45,
+  /** Flexible jobs stay open at most this long before expiring. */
+  FLEXIBLE_JOB_EXPIRES_DAYS: 7,
+  /** Unconfirmed scheduled jobs expire this long after their slot passes. */
+  SCHEDULED_JOB_EXPIRES_BUFFER_MS: 2 * 60 * 60 * 1000,
+} as const;
+
+export const SETTLEMENT = {
+  /** First work-progress check-in after this long in_progress. */
+  CHECKIN_FIRST_AFTER_MS: 4 * 60 * 60 * 1000,
+  /** Repeat check-ins at this cadence until work_ended_at is set. */
+  CHECKIN_REPEAT_MS: 2 * 60 * 60 * 1000,
 } as const;
 
 export const CANCELLATION_STAGE = {
@@ -36,6 +49,14 @@ export const CANCELLATION_STAGE = {
   TRAVEL_COMPENSATION: "travel_compensation",
   SIGNIFICANT_FEE: "significant_fee",
   TERMINATION_REQUESTED: "termination_requested",
+} as const;
+
+/** Ledger stages for worker-initiated cancellations (severity by job status). */
+export const WORKER_CANCELLATION_STAGE = {
+  BACKED_OUT: "worker_backed_out",
+  ABANDONED_ENROUTE: "worker_abandoned_enroute",
+  ABANDONED_ACTIVE: "worker_abandoned_active",
+  SCHEDULED_DROPOUT: "worker_scheduled_dropout",
 } as const;
 
 export const CANCELLATION_FEES = {

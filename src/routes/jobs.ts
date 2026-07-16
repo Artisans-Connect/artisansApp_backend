@@ -99,6 +99,15 @@ router.post(
 );
 
 router.post(
+  "/:id/confirm-work-done",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await jobsService.confirmWorkDone(req.user!.id, paramId(req.params.id));
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+router.post(
   "/:id/complete",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {

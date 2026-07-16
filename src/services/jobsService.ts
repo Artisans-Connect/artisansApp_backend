@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "../config/supabase";
-import { JOB_MODE, JOB_STATUS, MATCHING, CANCELLATION_STAGE, CANCELLATION_FEES } from "../constants/enums";
+import { JOB_MODE, JOB_STATUS, MATCHING, CANCELLATION_STAGE, CANCELLATION_FEES, SETTLEMENT, WORKER_CANCELLATION_STAGE } from "../constants/enums";
 import { appError } from "../utils/appError";
 import { haversineKm } from "../utils/haversine";
 import { completeJobSchema, createJobSchema } from "../validators/jobs.validator";
@@ -60,6 +60,23 @@ async function ensureRequestedWorkerCanReceiveImmediateRequest(workerId: string)
   }
 }
 
+function computeExpiresAt(jobMode: string, scheduledFor: string | null): string | null {
+  if (jobMode === JOB_MODE.ASAP) {
+    return new Date(Date.now() + MATCHING.JOB_EXPIRES_MINUTES * 60 * 1000).toISOString();
+  }
+  if (jobMode === JOB_MODE.FLEXIBLE) {
+    return new Date(Date.now() + MATCHING.FLEXIBLE_JOB_EXPIRES_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  }
+  if (jobMode === JOB_MODE.SCHEDULED && scheduledFor) {
+    // Unconfirmed scheduled jobs expire once the slot (plus buffer) has passed.
+    const scheduledAt = new Date(scheduledFor).getTime();
+    if (Number.isFinite(scheduledAt)) {
+      return new Date(scheduledAt + MATCHING.SCHEDULED_JOB_EXPIRES_BUFFER_MS).toISOString();
+    }
+  }
+  return null;
+}
+
 export async function createJob(userId: string, body: unknown, idempotencyKeyHeader?: string) {
   const parsed = createJobSchema.safeParse(body);
   if (!parsed.success) {
@@ -82,14 +99,13 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
     ? JOB_STATUS.MATCHING
     : statusForNewJob(input.job_mode);
 
-  if (input.requested_worker_id && shouldDispatch) {
+  if (input.requested_worker_id && shouldDispatch && input.job_mode !== JOB_MODE.SCHEDULED) {
+    // Scheduled requests skip the busy check: being busy now says nothing
+    // about availability at the scheduled time.
     await ensureRequestedWorkerCanReceiveImmediateRequest(input.requested_worker_id);
   }
 
-  const expiresAt =
-    input.job_mode === JOB_MODE.ASAP
-      ? new Date(Date.now() + MATCHING.JOB_EXPIRES_MINUTES * 60 * 1000).toISOString()
-      : null;
+  const expiresAt = computeExpiresAt(input.job_mode, input.scheduled_for ?? null);
 
   const { data, error } = await supabaseAdmin
     .from("jobs")
@@ -132,7 +148,11 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
   }
 
   if (input.requested_worker_id && shouldDispatch) {
-    await matchingService.dispatchToWorker(data.id, input.requested_worker_id);
+    // A targeted scheduled request stays live until the slot passes; ASAP
+    // and flexible targeted requests keep the standard round timeout.
+    const dispatchExpiry =
+      input.job_mode === JOB_MODE.SCHEDULED ? (expiresAt ?? undefined) : undefined;
+    await matchingService.dispatchToWorker(data.id, input.requested_worker_id, 1, 0, dispatchExpiry);
     await notifyService.notifyWorkerNewJob(input.requested_worker_id, {
       id: data.id,
       title: data.title,
@@ -152,6 +172,9 @@ function determineCancellationStage(jobStatus: string, jobUpdatedAt: string | nu
     case JOB_STATUS.DRAFT:
     case JOB_STATUS.SEARCHING:
     case JOB_STATUS.MATCHING:
+    // A confirmed scheduled job hasn't started (no travel, no work), so the
+    // client can cancel it freely before activation.
+    case JOB_STATUS.SCHEDULED_CONFIRMED:
       return { stage: CANCELLATION_STAGE.FREE, canCancel: true };
     case JOB_STATUS.MATCHED: {
       // Grace period: if job was matched less than 2 minutes ago, it's free
@@ -207,16 +230,39 @@ async function computeCancellationFee(
   if (stage === CANCELLATION_STAGE.TRAVEL_COMPENSATION && job.worker_id) {
     const worker = await getWorkerLocation(job.worker_id);
     if (worker?.current_lat != null && worker?.current_lng != null && job.location_lat != null && job.location_lng != null) {
-      const distanceKm = haversineKm(
-        Number(worker.current_lat),
-        Number(worker.current_lng),
-        Number(job.location_lat),
-        Number(job.location_lng),
-      );
+      let distanceKm: number;
+      let basis: string;
+      if (job.worker_origin_lat != null && job.worker_origin_lng != null) {
+        // Compensate the distance the worker actually travelled (origin at
+        // on_the_way → current position), never more than the full trip.
+        const travelledKm = haversineKm(
+          Number(job.worker_origin_lat),
+          Number(job.worker_origin_lng),
+          Number(worker.current_lat),
+          Number(worker.current_lng),
+        );
+        const fullTripKm = haversineKm(
+          Number(job.worker_origin_lat),
+          Number(job.worker_origin_lng),
+          Number(job.location_lat),
+          Number(job.location_lng),
+        );
+        distanceKm = Math.min(travelledKm, fullTripKm);
+        basis = "travelled";
+      } else {
+        // Legacy jobs without a captured origin: fall back to remaining distance.
+        distanceKm = haversineKm(
+          Number(worker.current_lat),
+          Number(worker.current_lng),
+          Number(job.location_lat),
+          Number(job.location_lng),
+        );
+        basis = "remaining";
+      }
       const fee = Math.round(distanceKm * CANCELLATION_FEES.TRAVEL_RATE_PER_KM);
       return {
         amount: Math.max(fee, 0),
-        reason: `Travel compensation: ${distanceKm.toFixed(1)} km × GH₵ ${CANCELLATION_FEES.TRAVEL_RATE_PER_KM}/km`,
+        reason: `Travel compensation (${basis}): ${distanceKm.toFixed(1)} km × GH₵ ${CANCELLATION_FEES.TRAVEL_RATE_PER_KM}/km`,
         distanceKm,
       };
     }
@@ -283,6 +329,79 @@ async function incrementClientCancelCount(clientId: string) {
       .update({ client_cancel_count: newCount })
       .eq("id", clientId);
   }
+}
+
+export async function incrementWorkerCancelCount(workerId: string) {
+  const { data: profile } = await supabaseAdmin
+    .from("profiles")
+    .select("worker_cancel_count, worker_cancel_reset_at")
+    .eq("id", workerId)
+    .maybeSingle();
+
+  const resetAt = profile?.worker_cancel_reset_at ? new Date(profile.worker_cancel_reset_at) : null;
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  if (!resetAt || resetAt < thirtyDaysAgo) {
+    await supabaseAdmin
+      .from("profiles")
+      .update({ worker_cancel_count: 1, worker_cancel_reset_at: new Date().toISOString() })
+      .eq("id", workerId);
+  } else {
+    const newCount = (profile?.worker_cancel_count ?? 0) + 1;
+    await supabaseAdmin
+      .from("profiles")
+      .update({ worker_cancel_count: newCount })
+      .eq("id", workerId);
+  }
+}
+
+export function determineWorkerCancellationStage(jobStatus: string): string {
+  switch (jobStatus) {
+    case JOB_STATUS.SCHEDULED_CONFIRMED:
+      return WORKER_CANCELLATION_STAGE.SCHEDULED_DROPOUT;
+    case JOB_STATUS.ON_THE_WAY:
+    case JOB_STATUS.ARRIVED:
+      return WORKER_CANCELLATION_STAGE.ABANDONED_ENROUTE;
+    case JOB_STATUS.IN_PROGRESS:
+    case JOB_STATUS.TERMINATION_REQUESTED:
+      return WORKER_CANCELLATION_STAGE.ABANDONED_ACTIVE;
+    case JOB_STATUS.MATCHED:
+    default:
+      return WORKER_CANCELLATION_STAGE.BACKED_OUT;
+  }
+}
+
+export async function recordWorkerCancellation(
+  jobId: string,
+  workerId: string,
+  statusAtCancel: string,
+  reason?: string,
+) {
+  const stage = determineWorkerCancellationStage(statusAtCancel);
+  await recordCancellation(
+    jobId,
+    "worker",
+    stage,
+    statusAtCancel,
+    0,
+    "Worker cancelled — no client fee",
+    reason,
+  );
+  await incrementWorkerCancelCount(workerId);
+}
+
+async function getAcceptedApplicationQuote(jobId: string, workerId: string | null | undefined) {
+  if (!workerId) return null;
+  const { data, error } = await supabaseAdmin
+    .from("job_applications")
+    .select("base_service_fee, distance_cost, urgency_premium, total_quote")
+    .eq("job_id", jobId)
+    .eq("worker_id", workerId)
+    .eq("status", "accepted")
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "APPLICATION_QUOTE_FETCH_FAILED");
+  return data;
 }
 
 async function releaseWorkerAfterTerminalJob(workerId: string | null | undefined) {
@@ -489,9 +608,9 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
   }
 
   const expiresAt =
-    job.job_mode === JOB_MODE.ASAP
-      ? new Date(Date.now() + MATCHING.JOB_EXPIRES_MINUTES * 60 * 1000).toISOString()
-      : job.expires_at;
+    job.job_mode === JOB_MODE.SCHEDULED
+      ? job.expires_at
+      : computeExpiresAt(job.job_mode, job.scheduled_for ?? null);
 
   matchingService.clearDispatchState(jobId);
 
@@ -524,6 +643,85 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
   return data;
 }
 
+/**
+ * Cron: neutral work-progress check-ins for long-running in_progress jobs.
+ * First check-in after SETTLEMENT.CHECKIN_FIRST_AFTER_MS, repeating every
+ * SETTLEMENT.CHECKIN_REPEAT_MS until either party confirms the work is done.
+ */
+export async function sendWorkProgressCheckIns(): Promise<void> {
+  const now = Date.now();
+  const firstDue = new Date(now - SETTLEMENT.CHECKIN_FIRST_AFTER_MS).toISOString();
+
+  const { data: jobs, error } = await supabaseAdmin
+    .from("jobs")
+    .select("id, client_id, worker_id, started_at, work_ended_at, last_progress_checkin_at")
+    .eq("status", JOB_STATUS.IN_PROGRESS)
+    .is("work_ended_at", null)
+    .not("started_at", "is", null)
+    .lte("started_at", firstDue);
+
+  if (error) return;
+
+  for (const job of jobs ?? []) {
+    const lastCheckin = job.last_progress_checkin_at
+      ? new Date(job.last_progress_checkin_at).getTime()
+      : null;
+    if (lastCheckin != null && now - lastCheckin < SETTLEMENT.CHECKIN_REPEAT_MS) continue;
+
+    // Stamp first so a slow push can't double-send on the next tick.
+    const { data: stamped } = await supabaseAdmin
+      .from("jobs")
+      .update({ last_progress_checkin_at: new Date(now).toISOString() })
+      .eq("id", job.id)
+      .eq("status", JOB_STATUS.IN_PROGRESS)
+      .is("work_ended_at", null)
+      .select("id")
+      .maybeSingle();
+    if (!stamped) continue;
+
+    await notifyService.notifyWorkProgressCheckIn(job.client_id, job.id, "client");
+    if (job.worker_id) {
+      await notifyService.notifyWorkProgressCheckIn(job.worker_id, job.id, "worker");
+    }
+  }
+}
+
+export async function confirmWorkDone(userId: string, jobId: string) {
+  const { data: job } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+  if (job.client_id !== userId && job.worker_id !== userId) {
+    throw appError(403, "Only the client or assigned worker can confirm the work", "FORBIDDEN");
+  }
+  if (![JOB_STATUS.IN_PROGRESS, JOB_STATUS.TERMINATION_REQUESTED].includes(job.status)) {
+    throw appError(409, "Work can only be confirmed while the job is in progress", "INVALID_JOB_STATE");
+  }
+  if (job.work_ended_at) return job;
+
+  // Stop the settlement clock. Status is unchanged: the worker still submits
+  // completion details, and the client still approves them.
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .update({ work_ended_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", jobId)
+    .is("work_ended_at", null)
+    .select()
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "WORK_CONFIRM_FAILED");
+  if (!data) return job; // another party confirmed concurrently
+
+  const confirmedByClient = userId === job.client_id;
+  const otherPartyId = confirmedByClient ? job.worker_id : job.client_id;
+  if (otherPartyId) {
+    await notifyService.notifyWorkConfirmedDone(
+      otherPartyId,
+      jobId,
+      confirmedByClient ? "worker" : "client",
+    );
+  }
+  return data;
+}
+
 export async function completeJob(userId: string, jobId: string) {
   return completeJobWithDetails(userId, jobId, {});
 }
@@ -540,26 +738,32 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
   if (job.worker_id !== userId) {
     throw appError(403, "Only the assigned worker can submit completion", "FORBIDDEN");
   }
-  if (job.status === JOB_STATUS.PENDING_CLIENT_APPROVAL) return job;
-  if (job.status !== JOB_STATUS.IN_PROGRESS) {
+  if (![JOB_STATUS.IN_PROGRESS, JOB_STATUS.PENDING_CLIENT_APPROVAL].includes(job.status)) {
     throw appError(409, "Job must be in progress before completion", "INVALID_JOB_STATE");
   }
 
   const input = parsed.data;
 
-  // Auto-calculate hours spent
+  // The settlement clock stops at work_ended_at (set when either party
+  // confirms the work is done). Submitting completion stops it now if it
+  // hasn't been stopped yet — the timer never runs past this point.
+  const workEndedAtIso = job.work_ended_at ?? new Date().toISOString();
+
+  // Auto-calculate hours spent (display/settlement metric)
   let calculatedHours = 1;
   if (job.started_at) {
-    const msDiff = Date.now() - new Date(job.started_at).getTime();
+    const msDiff = new Date(workEndedAtIso).getTime() - new Date(job.started_at).getTime();
     calculatedHours = Math.max(0.1, msDiff / (1000 * 60 * 60));
   }
   const hoursSpent = Math.round(calculatedHours * 100) / 100;
 
   // Compute settlement fields
-  let baseRate = 0;
-  if (job.budget_type === "fixed") {
+  const acceptedQuote = await getAcceptedApplicationQuote(jobId, job.worker_id);
+
+  let baseRate = acceptedQuote?.base_service_fee ? Number(acceptedQuote.base_service_fee) : 0;
+  if (baseRate <= 0 && job.budget_type === "fixed") {
     baseRate = Number(job.budget_fixed ?? 0);
-  } else {
+  } else if (baseRate <= 0) {
     const { data: worker } = await supabaseAdmin
       .from("workers")
       .select("hourly_rate")
@@ -570,24 +774,19 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
     baseRate = Math.round(hoursSpent * hourlyRate * 100) / 100;
   }
 
-  let distanceCost = 0;
-  if (job.location_lat != null && job.location_lng != null) {
-    const KUMASI_CBD_LAT = 6.6885;
-    const KUMASI_CBD_LNG = -1.6244;
-    const DISTANCE_RATE_PER_KM = 3.0;
-    const distanceKm = haversineKm(
-      Number(job.location_lat),
-      Number(job.location_lng),
-      KUMASI_CBD_LAT,
-      KUMASI_CBD_LNG,
-    );
-    distanceCost = Math.round(distanceKm * DISTANCE_RATE_PER_KM);
-  }
+  const distanceCost = acceptedQuote?.distance_cost ? Number(acceptedQuote.distance_cost) : 0;
 
   const subtotal = baseRate + distanceCost;
-  const urgencyPremium = job.job_mode === "asap" ? Math.round(subtotal * 0.20) : 0;
+  // Urgency is priced when the accepted quote is formed. If no quote exists,
+  // it is never re-derived at settlement (the urgency was already resolved by
+  // matching the worker).
+  const urgencyPremium = acceptedQuote?.urgency_premium != null
+    ? Number(acceptedQuote.urgency_premium)
+    : 0;
 
-  let grossAmount = Math.round((baseRate + distanceCost + urgencyPremium) * 100) / 100;
+  let grossAmount = acceptedQuote?.total_quote
+    ? Number(acceptedQuote.total_quote)
+    : Math.round((baseRate + distanceCost + urgencyPremium) * 100) / 100;
   
   if (input.proposed_amount != null && input.proposed_amount > 0) {
     grossAmount = input.proposed_amount;
@@ -620,16 +819,17 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
     .from("jobs")
     .update({
       status: JOB_STATUS.PENDING_CLIENT_APPROVAL,
+      work_ended_at: workEndedAtIso,
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)
-    .select()
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .single();
 
   if (error) throw appError(500, error.message, "JOB_COMPLETE_FAILED");
 
   matchingService.clearDispatchState(jobId);
-  await notifyService.notifyCompletionSubmitted(job.client_id);
+  await notifyService.notifyCompletionSubmitted(job.client_id, jobId);
 
   return data;
 }
@@ -653,6 +853,7 @@ export async function approveCompletion(userId: string, jobId: string) {
   if (error) throw appError(500, error.message, "JOB_APPROVE_COMPLETION_FAILED");
   matchingService.clearDispatchState(jobId);
   await releaseWorkerAfterTerminalJob(job.worker_id);
+  await notifyService.notifyJobCompleted(job.client_id, jobId);
   return data;
 }
 
@@ -674,6 +875,11 @@ export async function reopenJob(userId: string, jobId: string, body: unknown) {
     .from("jobs")
     .update({
       status: JOB_STATUS.IN_PROGRESS,
+      // Work resumes, so the settlement clock resumes with it. The check-in
+      // stamp is reset to now so the cron doesn't fire immediately on the
+      // next tick (started_at is hours old by the time a job is disputed).
+      work_ended_at: null,
+      last_progress_checkin_at: new Date().toISOString(),
       completion_dispute_note: note || "Client reported the job is not complete.",
       updated_at: new Date().toISOString(),
     })
@@ -683,11 +889,11 @@ export async function reopenJob(userId: string, jobId: string, body: unknown) {
 
   if (error) throw appError(500, error.message, "JOB_REOPEN_FAILED");
   if (job.worker_id) {
-    await notifyService.notifyWorkerNewJob(job.worker_id, {
-      id: job.id,
-      title: job.title,
-      address_label: job.address_label,
-    });
+    await notifyService.notifyCompletionDisputed(
+      job.worker_id,
+      jobId,
+      note || "Client reported the job is not complete.",
+    );
   }
   return data;
 }
@@ -695,7 +901,7 @@ export async function reopenJob(userId: string, jobId: string, body: unknown) {
 export async function getMyJobs(userId: string, statusFilter?: string[]) {
   let query = supabaseAdmin
     .from("jobs")
-    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, cancellation_stage, cancellation_fee, cancellation_fee_currency, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
+    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, scheduled_for, work_ended_at, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, cancellation_stage, cancellation_fee, cancellation_fee_currency, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .eq("client_id", userId)
     .order("created_at", { ascending: false });
 

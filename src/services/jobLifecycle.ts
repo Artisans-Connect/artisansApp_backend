@@ -1,6 +1,6 @@
 import { JOB_MODE, JOB_STATUS } from "../constants/enums";
 
-export const SCHEDULED_JOB_ACTIVATION_LEAD_MS = 60 * 60 * 1000;
+export const SCHEDULED_JOB_ACTIVATION_LEAD_MS = 2 * 60 * 60 * 1000;
 
 export const ACTIVE_WORKER_JOB_STATUSES = [
   JOB_STATUS.MATCHED,
@@ -21,13 +21,21 @@ export const WORKER_ACTIVE_JOB_CONSTRAINT_NAME = "one_active_worker_job_per_work
 
 export const REDISPATCH_BLOCKING_DISPATCH_STATUSES = ["sent", "seen", "accepted"] as const;
 
-export function statusForNewJob(jobMode: string): string {
-  return jobMode === JOB_MODE.SCHEDULED ? JOB_STATUS.DRAFT : JOB_STATUS.SEARCHING;
+export function statusForNewJob(_jobMode: string): string {
+  // Scheduled jobs are visible/searchable at creation so workers can plan
+  // ahead; they only become an active assignment near the scheduled time.
+  return JOB_STATUS.SEARCHING;
 }
 
 export function shouldDispatchJobOnCreate(jobMode: string, hasRequestedWorker: boolean): boolean {
-  if (jobMode === JOB_MODE.SCHEDULED) return false;
+  // Scheduled jobs skip the ASAP round engine, but a directly requested
+  // worker should hear about the job immediately.
+  if (jobMode === JOB_MODE.SCHEDULED) return hasRequestedWorker;
   return hasRequestedWorker || jobMode === JOB_MODE.ASAP || jobMode === JOB_MODE.FLEXIBLE;
+}
+
+export function isScheduledConfirmed(status: string | null | undefined): boolean {
+  return status === JOB_STATUS.SCHEDULED_CONFIRMED;
 }
 
 export function shouldActivateScheduledJob(

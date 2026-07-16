@@ -11,16 +11,21 @@ import {
   statusForNewJob,
 } from "../src/services/jobLifecycle";
 
-test("new ASAP and flexible jobs open immediately, scheduled jobs stay dormant", () => {
+test("all new jobs open immediately, including scheduled ones", () => {
   assert.equal(statusForNewJob("asap"), "searching");
   assert.equal(statusForNewJob("flexible"), "searching");
-  assert.equal(statusForNewJob("scheduled"), "draft");
+  // Scheduled jobs are visible from creation so workers can plan ahead;
+  // they only become an active assignment near the scheduled time.
+  assert.equal(statusForNewJob("scheduled"), "searching");
 });
 
-test("targeted scheduled jobs are not dispatched immediately", () => {
+test("targeted jobs dispatch immediately; untargeted scheduled jobs skip the round engine", () => {
   assert.equal(shouldDispatchJobOnCreate("asap", true), true);
   assert.equal(shouldDispatchJobOnCreate("flexible", true), true);
-  assert.equal(shouldDispatchJobOnCreate("scheduled", true), false);
+  // The requested worker hears about a scheduled job right away...
+  assert.equal(shouldDispatchJobOnCreate("scheduled", true), true);
+  // ...but open scheduled jobs are not driven by the ASAP round engine.
+  assert.equal(shouldDispatchJobOnCreate("scheduled", false), false);
 });
 
 test("scheduled jobs activate only inside the configured lead window", () => {
@@ -41,9 +46,20 @@ test("only genuinely active worker jobs block a new assignment", () => {
     assert.equal(isActiveWorkerJobStatus(status), true);
   }
 
-  for (const status of ["searching", "matching", "pending_client_approval", "completed", "cancelled"]) {
+  for (const status of [
+    "searching",
+    "matching",
+    "scheduled_confirmed",
+    "pending_client_approval",
+    "completed",
+    "cancelled",
+  ]) {
     assert.equal(isActiveWorkerJobStatus(status), false);
   }
+});
+
+test("a confirmed scheduled job never blocks the worker from other assignments", () => {
+  assert.equal(isWorkerAssignmentBlockingStatus("scheduled_confirmed"), false);
 });
 
 test("assignment blocking includes approval-pending jobs to prevent reopen double-booking", () => {
