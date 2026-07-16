@@ -13,6 +13,17 @@ export async function listNotifications(userId: string, limit = 50) {
   return data ?? [];
 }
 
+export async function getUnreadNotificationCount(userId: string) {
+  const { count, error } = await supabaseAdmin
+    .from("notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .is("read_at", null);
+
+  if (error) throw appError(500, error.message, "NOTIFICATIONS_UNREAD_COUNT_FAILED");
+  return { unread_count: count ?? 0 };
+}
+
 export async function markNotificationRead(userId: string, notificationId: string) {
   const { data, error } = await supabaseAdmin
     .from("notifications")

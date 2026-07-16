@@ -16,6 +16,15 @@ router.get(
   }),
 );
 
+router.get(
+  "/unread-count",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await notificationsService.getUnreadNotificationCount(req.user!.id);
+    res.status(200).json({ success: true, data: result });
+  }),
+);
+
 router.patch(
   "/read-all",
   authMiddleware,
