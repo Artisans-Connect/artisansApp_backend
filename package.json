@@ -7,7 +7,12 @@
     "start": "node dist/server.js",
     "dev": "cross-env NODE_ENV=development tsx watch src/server.ts",
     "test": "tsx --test tests/*.test.ts",
-    "bench": "tsx scripts/experiments/runAll.ts"
+    "bench": "tsx scripts/experiments/runAll.ts",
+    "seed:categories": "tsx scripts/seed-categories.ts",
+    "seed:workers": "tsx scripts/seed-workers.ts",
+    "seed:dev": "tsx scripts/seed-dev.ts",
+    "seed:reset:dev": "tsx scripts/seed-reset-dev.ts",
+    "seed:verify": "tsx scripts/verify-seed.ts"
   },
   "keywords": [],
   "author": "",

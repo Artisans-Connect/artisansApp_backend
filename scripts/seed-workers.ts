@@ -1,182 +1,9 @@
 import { supabaseAdmin } from "../src/config/supabase";
-
-const workersToSeed = [
-  {
-    email: "kwasi.plumber@craftmatch.com",
-    password: "Password123!",
-    full_name: "Kwasi Mensah",
-    phone: "+233241234567",
-    avatar_url: "https://images.unsplash.com/photo-1540569014015-19a7be504e3a?auto=format&fit=crop&q=80&w=200",
-    bio: "Experienced plumber with 8+ years in home maintenance and leakage repair.",
-    location_label: "KNUST Campus, Kumasi",
-    skills: ["plumbing", "plumber", "leakage"],
-    hourly_rate: 65.0,
-    current_lat: 6.6730,
-    current_lng: -1.5650,
-    rating: 4.8,
-    total_jobs: 24,
-    service_areas: ["KNUST Campus", "Ayigya", "Bomso"],
-    experience_band: "mid"
-  },
-  {
-    email: "abena.spark@craftmatch.com",
-    password: "Password123!",
-    full_name: "Abena Osei",
-    phone: "+233242234567",
-    avatar_url: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=200",
-    bio: "Certified electrician specializing in industrial wiring and appliance repair.",
-    location_label: "Ayigya, Kumasi",
-    skills: ["electrical", "electrician", "wiring"],
-    hourly_rate: 75.0,
-    current_lat: 6.6850,
-    current_lng: -1.5600,
-    rating: 4.9,
-    total_jobs: 38,
-    service_areas: ["Ayigya", "Kentinkrono", "KNUST"],
-    experience_band: "senior"
-  },
-  {
-    email: "kofi.wood@craftmatch.com",
-    password: "Password123!",
-    full_name: "Kofi Boateng",
-    phone: "+233243234567",
-    avatar_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200",
-    bio: "Furniture maker and carpenter. High-quality woodwork and cabinet installations.",
-    location_label: "Kotei, Kumasi",
-    skills: ["carpentry", "carpenter", "woodwork"],
-    hourly_rate: 55.0,
-    current_lat: 6.6620,
-    current_lng: -1.5790,
-    rating: 4.7,
-    total_jobs: 19,
-    service_areas: ["Kotei", "Bomso", "KNUST"],
-    experience_band: "mid"
-  },
-  {
-    email: "ama.clean@craftmatch.com",
-    password: "Password123!",
-    full_name: "Ama Serwaa",
-    phone: "+233244234567",
-    avatar_url: "https://images.unsplash.com/photo-1567532939604-b6b5b0db2604?auto=format&fit=crop&q=80&w=200",
-    bio: "Professional cleaner offering deep cleaning services for offices and residences.",
-    location_label: "Ayeduase, Kumasi",
-    skills: ["cleaning", "cleaner", "deep clean"],
-    hourly_rate: 40.0,
-    current_lat: 6.6705,
-    current_lng: -1.5830,
-    rating: 4.6,
-    total_jobs: 45,
-    service_areas: ["Ayeduase", "KNUST Campus", "Oforikrom"],
-    experience_band: "senior"
-  },
-  {
-    email: "yaw.painter@craftmatch.com",
-    password: "Password123!",
-    full_name: "Yaw Addo",
-    phone: "+233245234567",
-    avatar_url: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200",
-    bio: "Expert wall painter and surface decorator. Interior and exterior painting.",
-    location_label: "Oforikrom, Kumasi",
-    skills: ["painting", "painter", "paint"],
-    hourly_rate: 50.0,
-    current_lat: 6.6820,
-    current_lng: -1.5950,
-    rating: 4.5,
-    total_jobs: 11,
-    service_areas: ["Oforikrom", "Bomso", "KNUST"],
-    experience_band: "junior"
-  },
-  {
-    email: "efua.build@craftmatch.com",
-    password: "Password123!",
-    full_name: "Efua Asante",
-    phone: "+233246234567",
-    avatar_url: "https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&q=80&w=200",
-    bio: "Construction and renovation artisan for small residential works around campus.",
-    location_label: "Kentinkrono, Kumasi",
-    skills: ["construction", "builder", "renovation"],
-    hourly_rate: 85.0,
-    current_lat: 6.6902,
-    current_lng: -1.5737,
-    rating: 4.7,
-    total_jobs: 31,
-    service_areas: ["Kentinkrono", "Ayigya", "KNUST Campus"],
-    experience_band: "senior"
-  },
-  {
-    email: "nana.hvac@craftmatch.com",
-    password: "Password123!",
-    full_name: "Nana Yeboah",
-    phone: "+233247234567",
-    avatar_url: "https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=200",
-    bio: "HVAC technician for AC servicing, fridge repair, and ventilation support.",
-    location_label: "Bomso, Kumasi",
-    skills: ["hvac", "ac", "refrigeration"],
-    hourly_rate: 80.0,
-    current_lat: 6.6788,
-    current_lng: -1.5798,
-    rating: 4.8,
-    total_jobs: 27,
-    service_areas: ["Bomso", "KNUST", "Oforikrom"],
-    experience_band: "mid"
-  },
-  {
-    email: "akua.garden@craftmatch.com",
-    password: "Password123!",
-    full_name: "Akua Frimpong",
-    phone: "+233248234567",
-    avatar_url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=200",
-    bio: "Landscaping and compound cleanup specialist for homes and hostels.",
-    location_label: "Ayeduase Gate, Kumasi",
-    skills: ["landscaping", "garden", "weeding"],
-    hourly_rate: 45.0,
-    current_lat: 6.6658,
-    current_lng: -1.5724,
-    rating: 4.4,
-    total_jobs: 16,
-    service_areas: ["Ayeduase", "Kotei", "KNUST Campus"],
-    experience_band: "junior"
-  },
-  {
-    email: "kojo.pipe@craftmatch.com",
-    password: "Password123!",
-    full_name: "Kojo Appiah",
-    phone: "+233249234567",
-    avatar_url: "https://images.unsplash.com/photo-1531891437562-4301cf35b7e4?auto=format&fit=crop&q=80&w=200",
-    bio: "Fast-response plumber for hostel repairs, pipe fittings, and blocked drains.",
-    location_label: "Ayigya Zongo, Kumasi",
-    skills: ["plumbing", "plumber", "drainage"],
-    hourly_rate: 60.0,
-    current_lat: 6.6868,
-    current_lng: -1.5528,
-    rating: 4.6,
-    total_jobs: 22,
-    service_areas: ["Ayigya", "KNUST", "Kentinkrono"],
-    experience_band: "mid"
-  },
-  {
-    email: "esi.electro@craftmatch.com",
-    password: "Password123!",
-    full_name: "Esi Dankwah",
-    phone: "+233250234567",
-    avatar_url: "https://images.unsplash.com/photo-1580489944761-15a19d654956?auto=format&fit=crop&q=80&w=200",
-    bio: "Electrical repairs for sockets, lighting, small appliances, and hostel rooms.",
-    location_label: "Boadi, Kumasi",
-    skills: ["electrical", "electrician", "lighting"],
-    hourly_rate: 70.0,
-    current_lat: 6.6548,
-    current_lng: -1.5488,
-    rating: 4.5,
-    total_jobs: 18,
-    service_areas: ["Boadi", "KNUST", "Ayigya"],
-    experience_band: "mid"
-  }
-];
+import { demoWorkers as workersToSeed } from "./seed-data/workers";
 
 async function main() {
   console.log("Starting worker seeding...");
 
-  // 1. Fetch all existing users from Supabase auth admin list
   const { data: { users }, error: listError } = await supabaseAdmin.auth.admin.listUsers();
   if (listError) {
     console.error("Failed to list users:", listError.message);
@@ -185,9 +12,8 @@ async function main() {
 
   for (const worker of workersToSeed) {
     console.log(`Seeding worker: ${worker.full_name} (${worker.email})`);
-    
-    // Find or create auth user
-    const existing = users.find(u => u.email === worker.email);
+
+    const existing = users.find((u) => u.email === worker.email);
     let userId: string;
 
     if (existing) {
@@ -198,7 +24,7 @@ async function main() {
         email: worker.email,
         password: worker.password,
         email_confirm: true,
-        user_metadata: { role: "worker" }
+        user_metadata: { role: "worker" },
       });
 
       if (authError) {
@@ -209,7 +35,6 @@ async function main() {
       console.log(`Created new auth user with ID: ${userId}`);
     }
 
-    // Create/Upsert Profile record
     const { error: profileError } = await supabaseAdmin.from("profiles").upsert({
       id: userId,
       full_name: worker.full_name,
@@ -219,22 +44,21 @@ async function main() {
       avatar_url: worker.avatar_url,
       bio: worker.bio,
       location_label: worker.location_label,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     });
 
     if (profileError) {
       console.error(`Failed to seed profile for ${worker.full_name}:`, profileError.message);
       continue;
     }
-    console.log(`Profile seeded successfully.`);
+    console.log("Profile seeded successfully.");
 
-    // Create/Upsert Worker record
     const { error: workerError } = await supabaseAdmin.from("workers").upsert({
       id: userId,
       skills: worker.skills,
       hourly_rate: worker.hourly_rate,
       rate_type: "hourly",
-      is_available: true,
+      is_available: worker.is_available ?? true,
       is_verified: true,
       current_lat: worker.current_lat,
       current_lng: worker.current_lng,
@@ -243,68 +67,61 @@ async function main() {
       total_jobs: worker.total_jobs,
       service_areas: worker.service_areas,
       experience_band: worker.experience_band,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     });
 
     if (workerError) {
       console.error(`Failed to seed worker record for ${worker.full_name}:`, workerError.message);
       continue;
     }
-    console.log(`Worker details seeded successfully.`);
+    console.log("Worker details seeded successfully.");
 
-    // Create/Update Worker Verification record
     const { data: existingVerification } = await supabaseAdmin
       .from("worker_verifications")
       .select("id")
       .eq("worker_id", userId)
       .maybeSingle();
 
+    const years =
+      worker.experience_band === "senior" ? 10 : worker.experience_band === "mid" ? 5 : 2;
+
+    const verificationPayload = {
+      status: "approved",
+      verification_level: "professional",
+      full_name: worker.full_name,
+      phone_number: worker.phone,
+      email: worker.email,
+      trade_category: worker.skills[0],
+      years_of_experience: years,
+      current_region: "Ashanti",
+      current_city: "Kumasi",
+      confidence_score: 95,
+      updated_at: new Date().toISOString(),
+    };
+
     if (existingVerification) {
       const { error: updateVerError } = await supabaseAdmin
         .from("worker_verifications")
-        .update({
-          status: "approved",
-          verification_level: "professional",
-          full_name: worker.full_name,
-          phone_number: worker.phone,
-          email: worker.email,
-          trade_category: worker.skills[0],
-          years_of_experience: worker.experience_band === "senior" ? 10 : (worker.experience_band === "mid" ? 5 : 2),
-          current_region: "Ashanti",
-          current_city: "Kumasi",
-          confidence_score: 95,
-          updated_at: new Date().toISOString()
-        })
+        .update(verificationPayload)
         .eq("id", existingVerification.id);
 
       if (updateVerError) {
         console.error(`Failed to update verification for ${worker.full_name}:`, updateVerError.message);
       } else {
-        console.log(`Worker verification updated.`);
+        console.log("Worker verification updated.");
       }
     } else {
-      const { error: insertVerError } = await supabaseAdmin
-        .from("worker_verifications")
-        .insert({
-          worker_id: userId,
-          status: "approved",
-          verification_level: "professional",
-          full_name: worker.full_name,
-          phone_number: worker.phone,
-          email: worker.email,
-          trade_category: worker.skills[0],
-          years_of_experience: worker.experience_band === "senior" ? 10 : (worker.experience_band === "mid" ? 5 : 2),
-          current_region: "Ashanti",
-          current_city: "Kumasi",
-          confidence_score: 95,
-          submitted_at: new Date().toISOString(),
-          reviewed_at: new Date().toISOString()
-        });
+      const { error: insertVerError } = await supabaseAdmin.from("worker_verifications").insert({
+        worker_id: userId,
+        ...verificationPayload,
+        submitted_at: new Date().toISOString(),
+        reviewed_at: new Date().toISOString(),
+      });
 
       if (insertVerError) {
         console.error(`Failed to create verification for ${worker.full_name}:`, insertVerError.message);
       } else {
-        console.log(`Worker verification created.`);
+        console.log("Worker verification created.");
       }
     }
   }
@@ -312,7 +129,7 @@ async function main() {
   console.log("Worker seeding complete!");
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error("Fatal error during seeding:", err);
   process.exit(1);
 });

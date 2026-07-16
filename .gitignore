@@ -26,3 +26,11 @@ Thumbs.db
 all_migrations.txt
 supabase/.temp/
 
+
+# Seeding scripts & data
+scripts/seed-data/
+scripts/seed-dev.ts
+scripts/seed-lib/
+scripts/seed-reset-dev.ts
+scripts/verify-seed.ts
+
