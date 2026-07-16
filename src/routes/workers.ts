@@ -47,7 +47,7 @@ router.post(
   "/accept/:jobId",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
-    const job = await workersService.acceptJob(req.user!.id, paramId(req.params.jobId));
+    const job = await workersService.acceptJob(req.user!.id, paramId(req.params.jobId), req.body ?? {});
     res.status(200).json({ success: true, data: job });
   }),
 );

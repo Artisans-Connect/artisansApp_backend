@@ -1,10 +1,13 @@
 import { haversineKm } from "../utils/haversine";
 
-const DISTANCE_WEIGHT = 0.3212;
-const RESPONSE_RATE_WEIGHT = 0.3467;
-const RATING_WEIGHT = 0.3321;
+const DISTANCE_WEIGHT = 0.2730;
+const RESPONSE_RATE_WEIGHT = 0.2947;
+const RATING_WEIGHT = 0.2823;
+const RELIABILITY_WEIGHT = 0.15; // weights sum to 1.0
 const PREMIUM_TIE_DELTA = 0.02;
 const NEW_ARTISAN_COMPLETED_JOBS_THRESHOLD = 5;
+/** Recent cancels at/above this count zero out the reliability component. */
+export const RELIABILITY_CANCEL_CAP = 5;
 
 export type RecommendationJobLocation = {
   location_lat: number;
@@ -19,6 +22,8 @@ export type RecommendationCandidate = {
   total_jobs: number | null;
   is_verified: boolean;
   responseRate: number;
+  /** 0..1, derived from recent worker cancellations (1 = no recent cancels). */
+  reliability?: number;
 };
 
 export type ScoredRecommendationCandidate = RecommendationCandidate & {
@@ -42,14 +47,17 @@ export function scoreRecommendationCandidate(
   const distanceScore = maxDistanceKm === 0 ? 1 : Math.max(0, 1 - distanceKm / maxDistanceKm);
   const responseRate = clamp01(candidate.responseRate);
   const ratingScore = clamp01(Number(candidate.rating ?? 0) / 5);
+  const reliability = clamp01(candidate.reliability ?? 1);
   const score =
     DISTANCE_WEIGHT * distanceScore +
     RESPONSE_RATE_WEIGHT * responseRate +
-    RATING_WEIGHT * ratingScore;
+    RATING_WEIGHT * ratingScore +
+    RELIABILITY_WEIGHT * reliability;
 
   return {
     ...candidate,
     responseRate,
+    reliability,
     distanceKm,
     distanceScore,
     ratingScore,

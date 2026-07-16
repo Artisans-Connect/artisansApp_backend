@@ -9,10 +9,13 @@ import {
   REDISPATCH_BLOCKING_DISPATCH_STATUSES,
   SCHEDULED_JOB_ACTIVATION_LEAD_MS,
   WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
+  isWorkerActiveJobConstraintError,
+  shouldActivateScheduledJob,
 } from "./jobLifecycle";
 import {
   applyFairnessSlot,
   rankRecommendationCandidates,
+  RELIABILITY_CANCEL_CAP,
   type RecommendationCandidate,
 } from "./recommendationEngine";
 import * as notifyService from "./notifyService";
@@ -122,36 +125,53 @@ async function fetchWorkerIdsWithBlockingAssignments(): Promise<Set<string>> {
   return new Set((data ?? []).map((row) => row.worker_id as string).filter(Boolean));
 }
 
-async function workerHasBlockingAssignment(workerId: string): Promise<boolean> {
-  const { count, error } = await supabaseAdmin
-    .from("jobs")
-    .select("id", { count: "exact", head: true })
-    .eq("worker_id", workerId)
-    .in("status", [...WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES]);
-
-  if (error) {
-    logger(`worker assignment check warning: ${error.message}`);
-    return true;
-  }
-
-  return (count ?? 0) > 0;
-}
-
 async function rankWorkers(
   workers: WorkerRow[],
   job: { location_lat: number; location_lng: number },
   limit: number,
 ): Promise<WorkerRow[]> {
-  const responseRates = await fetchWorkerResponseRates(workers.map((worker) => worker.id));
+  const workerIds = workers.map((worker) => worker.id);
+  const [responseRates, reliabilities] = await Promise.all([
+    fetchWorkerResponseRates(workerIds),
+    fetchWorkerReliability(workerIds),
+  ]);
   const candidates: WorkerRecommendationCandidate[] = workers.map((worker) => ({
     ...worker,
     current_lat: worker.current_lat!,
     current_lng: worker.current_lng!,
     responseRate: responseRates.get(worker.id) ?? 0,
+    reliability: reliabilities.get(worker.id) ?? 1,
   }));
 
   const ranked = rankRecommendationCandidates(candidates, job);
   return applyFairnessSlot(ranked, limit);
+}
+
+/**
+ * Reliability = 1 - min(recentCancels / cap, 1), where "recent" means the
+ * worker's 30-day rolling cancel window is still current.
+ */
+async function fetchWorkerReliability(workerIds: string[]): Promise<Map<string, number>> {
+  if (workerIds.length === 0) return new Map();
+
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .select("id, worker_cancel_count, worker_cancel_reset_at")
+    .in("id", workerIds);
+
+  if (error) {
+    logger(`worker reliability warning: ${error.message}`);
+    return new Map();
+  }
+
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  return new Map(
+    (data ?? []).map((row) => {
+      const resetAt = row.worker_cancel_reset_at ? new Date(row.worker_cancel_reset_at).getTime() : 0;
+      const recentCancels = resetAt >= thirtyDaysAgo ? Number(row.worker_cancel_count ?? 0) : 0;
+      return [row.id as string, 1 - Math.min(recentCancels / RELIABILITY_CANCEL_CAP, 1)];
+    }),
+  );
 }
 
 async function fetchWorkerResponseRates(workerIds: string[]): Promise<Map<string, number>> {
@@ -215,6 +235,7 @@ export async function dispatchToWorker(
   workerId: string,
   round = 1,
   radiusKm = 0,
+  expiresAtIso?: string,
 ): Promise<void> {
   const now = new Date();
   const { error } = await supabaseAdmin.from("job_dispatches").upsert(
@@ -224,7 +245,7 @@ export async function dispatchToWorker(
       round,
       radius_km: radiusKm,
       status: "sent",
-      expires_at: new Date(now.getTime() + MATCHING.ROUND_TIMEOUT_MS).toISOString(),
+      expires_at: expiresAtIso ?? new Date(now.getTime() + MATCHING.ROUND_TIMEOUT_MS).toISOString(),
       notified_at: now.toISOString(),
       responded_at: null,
     },
@@ -293,13 +314,16 @@ export async function expireJob(jobId: string): Promise<void> {
   await supabaseAdmin.from("jobs").update({ status: JOB_STATUS.EXPIRED }).eq("id", jobId);
   await markDispatchesExpired(jobId);
   clearDispatchState(jobId);
-  await notifyService.notifyJobExpired(job.client_id);
+  await notifyService.notifyJobExpired(job.client_id, jobId);
 }
 
 export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
   const job = await fetchJob(jobId);
   if (!job) return;
   if (![JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status)) return;
+  // Scheduled jobs are not driven by the ASAP round engine unless they were
+  // reopened at activation time (worker unavailable at the slot).
+  if (job.job_mode === "scheduled" && !shouldActivateScheduledJob(job.scheduled_for)) return;
 
   const state = getState(jobId);
   if (state.round !== round) {
@@ -327,7 +351,9 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
 
   if (batch.length === 0) {
     if (round >= MATCHING.MAX_ROUNDS) {
-      await expireJob(jobId);
+      // Scheduled jobs are never expired by round exhaustion — their
+      // expires_at (slot + buffer) cron is the only expiry authority.
+      if (job.job_mode !== "scheduled") await expireJob(jobId);
     } else {
       scheduleReDispatch(jobId, round);
     }
@@ -369,7 +395,7 @@ export async function checkAndReDispatch(jobId: string, round: number): Promise<
   await expireTimedOutDispatches(jobId);
 
   if (round >= MATCHING.MAX_ROUNDS) {
-    await expireJob(jobId);
+    if (job.job_mode !== "scheduled") await expireJob(jobId);
     return;
   }
 
@@ -395,7 +421,7 @@ export async function recordDecline(jobId: string, workerId: string): Promise<vo
     const state = getState(jobId);
     if (state.timeout) clearTimeout(state.timeout);
     if (state.round >= MATCHING.MAX_ROUNDS) {
-      await expireJob(jobId);
+      if (job.job_mode !== "scheduled") await expireJob(jobId);
     } else {
       await findAndDispatch(jobId, state.round + 1);
     }
@@ -435,7 +461,10 @@ export async function recoverTimedOutMatchingJobs(): Promise<void> {
   const { data: jobs, error } = await supabaseAdmin
     .from("jobs")
     .select("id, status")
-    .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING]);
+    .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
+    // Scheduled jobs wait for their activation window; the activation cron
+    // drives their dispatch, and expires_at drives their expiry.
+    .neq("job_mode", "scheduled");
 
   if (error) {
     logger(`matching recovery fetch warning: ${error.message}`);
@@ -477,67 +506,92 @@ export async function activateDueScheduledJobs(
   leadMs = SCHEDULED_JOB_ACTIVATION_LEAD_MS,
 ): Promise<void> {
   const activateBefore = new Date(now.getTime() + leadMs).toISOString();
-  const { data: jobs, error } = await supabaseAdmin
+
+  // Legacy rows: scheduled jobs created as draft before jobs became visible
+  // at creation. Promote them to searching so they enter the normal flow.
+  await supabaseAdmin
     .from("jobs")
-    .select("id, title, address_label, requested_worker_id")
+    .update({ status: JOB_STATUS.SEARCHING, updated_at: now.toISOString() })
     .eq("status", JOB_STATUS.DRAFT)
+    .eq("job_mode", "scheduled");
+
+  // 1. Confirmed scheduled jobs whose slot is near: promote to matched so the
+  // normal on_the_way → in_progress flow takes over.
+  const { data: confirmedJobs, error: confirmedError } = await supabaseAdmin
+    .from("jobs")
+    .select("id, title, address_label, client_id, worker_id, scheduled_for")
+    .eq("status", JOB_STATUS.SCHEDULED_CONFIRMED)
     .eq("job_mode", "scheduled")
     .lte("scheduled_for", activateBefore);
 
-  if (error) {
-    logger(`scheduled activation fetch warning: ${error.message}`);
+  if (confirmedError) {
+    logger(`scheduled activation fetch warning: ${confirmedError.message}`);
     return;
   }
 
-  for (const job of jobs ?? []) {
-    const isTargeted = Boolean(job.requested_worker_id);
-    const nextStatus = isTargeted ? JOB_STATUS.MATCHING : JOB_STATUS.SEARCHING;
-    const { data: updated, error: updateError } = await supabaseAdmin
+  for (const job of confirmedJobs ?? []) {
+    const { error: updateError } = await supabaseAdmin
       .from("jobs")
-      .update({ status: nextStatus, updated_at: now.toISOString() })
+      .update({ status: JOB_STATUS.MATCHED, updated_at: now.toISOString() })
       .eq("id", job.id)
-      .eq("status", JOB_STATUS.DRAFT)
-      .select("id, title, address_label, requested_worker_id")
-      .maybeSingle();
+      .eq("status", JOB_STATUS.SCHEDULED_CONFIRMED);
 
-    if (updateError) {
+    if (!updateError) continue;
+
+    if (!isWorkerActiveJobConstraintError(updateError)) {
       logger(`scheduled activation update warning: ${updateError.message}`);
       continue;
     }
-    if (!updated) continue;
 
-    if (updated.requested_worker_id) {
-      const requestedWorkerBusy = await workerHasBlockingAssignment(updated.requested_worker_id);
-      if (requestedWorkerBusy) {
-        const { data: fallbackJob, error: fallbackError } = await supabaseAdmin
-          .from("jobs")
-          .update({
-            status: JOB_STATUS.SEARCHING,
-            requested_worker_id: null,
-            updated_at: now.toISOString(),
-          })
-          .eq("id", updated.id)
-          .eq("status", JOB_STATUS.MATCHING)
-          .select("id")
-          .maybeSingle();
+    // Worker is still busy on another active job. Retry every tick across
+    // the lead window; once the slot itself has passed, release the job so
+    // the client can still be served by someone else.
+    const slotPassed = job.scheduled_for && new Date(job.scheduled_for).getTime() <= now.getTime();
+    if (!slotPassed) continue;
 
-        if (fallbackError) {
-          logger(`scheduled activation fallback warning: ${fallbackError.message}`);
-          continue;
-        }
-        if (fallbackJob) void findAndDispatch(updated.id, 1);
-        continue;
-      }
+    const { data: released, error: releaseError } = await supabaseAdmin
+      .from("jobs")
+      .update({
+        status: JOB_STATUS.SEARCHING,
+        worker_id: null,
+        requested_worker_id: null,
+        updated_at: now.toISOString(),
+      })
+      .eq("id", job.id)
+      .eq("status", JOB_STATUS.SCHEDULED_CONFIRMED)
+      .select("id")
+      .maybeSingle();
 
-      await dispatchToWorker(updated.id, updated.requested_worker_id);
-      await notifyService.notifyWorkerNewJob(updated.requested_worker_id, {
-        id: updated.id,
-        title: updated.title,
-        address_label: updated.address_label,
-      });
-    } else {
-      void findAndDispatch(updated.id, 1);
+    if (releaseError) {
+      logger(`scheduled activation release warning: ${releaseError.message}`);
+      continue;
     }
+    if (!released) continue;
+
+    if (job.worker_id) {
+      await notifyService.notifyScheduledActivationBlocked(job.client_id, job.worker_id, job.id);
+    }
+    void findAndDispatch(job.id, 1);
+  }
+
+  // 2. Unconfirmed scheduled jobs whose slot is near: no worker accepted in
+  // advance, so scramble via the round engine (its scheduled-mode guard
+  // permits dispatch inside the activation window).
+  const { data: unconfirmedJobs, error: unconfirmedError } = await supabaseAdmin
+    .from("jobs")
+    .select("id, worker_id")
+    .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
+    .eq("job_mode", "scheduled")
+    .is("worker_id", null)
+    .lte("scheduled_for", activateBefore);
+
+  if (unconfirmedError) {
+    logger(`scheduled unconfirmed fetch warning: ${unconfirmedError.message}`);
+    return;
+  }
+
+  for (const job of unconfirmedJobs ?? []) {
+    void findAndDispatch(job.id, 1);
   }
 }
 
@@ -564,16 +618,79 @@ export async function sendScheduledReminders(): Promise<void> {
     .select("id, client_id, worker_id, scheduled_for, status")
     .gte("scheduled_for", from)
     .lte("scheduled_for", to)
-    .in("status", [JOB_STATUS.DRAFT, JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING, JOB_STATUS.MATCHED, JOB_STATUS.IN_PROGRESS]);
+    .is("reminder_24h_sent_at", null)
+    .in("status", [
+      JOB_STATUS.DRAFT,
+      JOB_STATUS.SEARCHING,
+      JOB_STATUS.MATCHING,
+      JOB_STATUS.SCHEDULED_CONFIRMED,
+      JOB_STATUS.MATCHED,
+      JOB_STATUS.IN_PROGRESS,
+    ]);
 
   for (const job of jobs ?? []) {
-    if (!job.worker_id) continue;
-    const { data: workerProfile } = await supabaseAdmin
-      .from("profiles")
-      .select("full_name")
-      .eq("id", job.worker_id)
+    // Stamp first so a slow push can't double-send on a later run.
+    const { data: stamped } = await supabaseAdmin
+      .from("jobs")
+      .update({ reminder_24h_sent_at: new Date(now).toISOString() })
+      .eq("id", job.id)
+      .is("reminder_24h_sent_at", null)
+      .select("id")
       .maybeSingle();
-    await notifyService.notifyScheduledReminder(job.client_id, workerProfile?.full_name ?? "your artisan");
+    if (!stamped) continue;
+
+    if (job.worker_id) {
+      const { data: workerProfile } = await supabaseAdmin
+        .from("profiles")
+        .select("full_name")
+        .eq("id", job.worker_id)
+        .maybeSingle();
+      await notifyService.notifyScheduledReminder(job.client_id, job.id, workerProfile?.full_name ?? "your artisan");
+      // Day-of heads-up for the confirmed worker.
+      const { data: jobTitle } = await supabaseAdmin
+        .from("jobs")
+        .select("title")
+        .eq("id", job.id)
+        .maybeSingle();
+      await notifyService.notifyWorkerScheduledDayOf(job.worker_id, job.id, jobTitle?.title ?? "Your scheduled job");
+    } else {
+      // The client deserves the reminder even while unmatched, so they know
+      // to check on the job instead of being surprised at the slot.
+      await notifyService.notifyScheduledReminderUnmatched(job.client_id, job.id);
+    }
     logger(`Scheduled reminder sent for job ${job.id}`);
+  }
+}
+
+/**
+ * Per-minute cron: 2-hours-before reminder to the confirmed worker.
+ * Deduped via reminder_2h_sent_at.
+ */
+export async function sendScheduledWorkerReminders(): Promise<void> {
+  const now = Date.now();
+  const to = new Date(now + 2 * 60 * 60 * 1000).toISOString();
+
+  const { data: jobs } = await supabaseAdmin
+    .from("jobs")
+    .select("id, title, worker_id, scheduled_for")
+    .eq("job_mode", "scheduled")
+    .not("worker_id", "is", null)
+    .is("reminder_2h_sent_at", null)
+    .gte("scheduled_for", new Date(now).toISOString())
+    .lte("scheduled_for", to)
+    .in("status", [JOB_STATUS.SCHEDULED_CONFIRMED, JOB_STATUS.MATCHED]);
+
+  for (const job of jobs ?? []) {
+    const { data: stamped } = await supabaseAdmin
+      .from("jobs")
+      .update({ reminder_2h_sent_at: new Date(now).toISOString() })
+      .eq("id", job.id)
+      .is("reminder_2h_sent_at", null)
+      .select("id")
+      .maybeSingle();
+    if (!stamped) continue;
+
+    await notifyService.notifyWorkerScheduledSoon(job.worker_id, job.id, job.title ?? "Your scheduled job");
+    logger(`Scheduled 2h worker reminder sent for job ${job.id}`);
   }
 }

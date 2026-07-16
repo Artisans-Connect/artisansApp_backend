@@ -34,7 +34,6 @@ router.post(
       location_lat,
       location_lng,
       job_mode,
-      req.user!.id,
     );
 
     res.status(200).json({ success: true, data: estimate });

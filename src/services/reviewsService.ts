@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
 import { createReviewSchema } from "../validators/reviews.validator";
+import { approveCompletion } from "./jobsService";
 
 export async function createReview(userId: string, body: unknown) {
   const parsed = createReviewSchema.safeParse(body);
@@ -25,11 +26,7 @@ export async function createReview(userId: string, body: unknown) {
   if (job.worker_id !== input.worker_id) throw appError(400, "Worker ID does not match the job", "WORKER_MISMATCH");
 
   if (job.status === "pending_client_approval") {
-    const { error: jobError } = await supabaseAdmin
-      .from("jobs")
-      .update({ status: "completed", updated_at: new Date().toISOString() })
-      .eq("id", input.job_id);
-    if (jobError) throw appError(500, jobError.message, "JOB_APPROVE_COMPLETION_FAILED");
+    await approveCompletion(userId, input.job_id);
   }
 
   const { data, error } = await supabaseAdmin

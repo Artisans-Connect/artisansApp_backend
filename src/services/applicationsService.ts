@@ -7,6 +7,7 @@ import {
 } from "./jobLifecycle";
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
+import { quoteForWorkerApplication } from "./workerQuoteService";
 
 type ApplyToJobInput = {
   message?: unknown;
@@ -44,21 +45,9 @@ async function ensureWorkerHasNoActiveJob(workerId: string, currentJobId?: strin
 }
 
 export async function applyToJob(workerId: string, jobId: string, body?: ApplyToJobInput) {
-  await ensureWorkerHasNoActiveJob(workerId);
-
-  const { data: dispatch } = await supabaseAdmin
-    .from("job_dispatches")
-    .select("job_id")
-    .eq("job_id", jobId)
-    .eq("worker_id", workerId)
-    .in("status", ["sent", "seen", "accepted"])
-    .maybeSingle();
-
-  if (!dispatch) throw appError(403, "This job was not dispatched to you", "FORBIDDEN");
-
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
-    .select("id, client_id, status, worker_id")
+    .select("id, client_id, status, worker_id, job_mode")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -69,7 +58,27 @@ export async function applyToJob(workerId: string, jobId: string, body?: ApplyTo
   }
   if (job.worker_id) throw appError(409, "Job already has an assigned worker", "JOB_ALREADY_TAKEN");
 
+  const isScheduled = job.job_mode === JOB_MODE.SCHEDULED;
+
+  // Scheduled jobs don't block on today's workload (being busy now says
+  // nothing about the scheduled slot) and are open from the explore board
+  // without a dispatch round.
+  if (!isScheduled) {
+    await ensureWorkerHasNoActiveJob(workerId);
+
+    const { data: dispatch } = await supabaseAdmin
+      .from("job_dispatches")
+      .select("job_id")
+      .eq("job_id", jobId)
+      .eq("worker_id", workerId)
+      .in("status", ["sent", "seen", "accepted"])
+      .maybeSingle();
+
+    if (!dispatch) throw appError(403, "This job was not dispatched to you", "FORBIDDEN");
+  }
+
   const patch = readApplicationInput(body);
+  const quote = await quoteForWorkerApplication(jobId, workerId);
   const { data: application, error } = await supabaseAdmin
     .from("job_applications")
     .upsert(
@@ -78,11 +87,18 @@ export async function applyToJob(workerId: string, jobId: string, body?: ApplyTo
         worker_id: workerId,
         status: "pending",
         message: patch.message,
-        proposed_rate: patch.proposed_rate,
+        proposed_rate: quote.total_quote,
+        distance_km: quote.distance_km,
+        distance_cost: quote.distance_cost,
+        base_service_fee: quote.base_service_fee,
+        urgency_premium: quote.urgency_premium,
+        total_quote: quote.total_quote,
+        quote_currency: quote.quote_currency,
+        quoted_at: quote.quoted_at,
       },
       { onConflict: "job_id,worker_id" },
     )
-    .select("id, job_id, worker_id, status, message, proposed_rate, created_at")
+    .select("id, job_id, worker_id, status, message, proposed_rate, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at")
     .single();
 
   if (error) throw appError(500, error.message, "JOB_APPLICATION_FAILED");
@@ -116,7 +132,7 @@ export async function listApplicationsForJob(clientId: string, jobId: string) {
   const { data: applications, error } = await supabaseAdmin
     .from("job_applications")
     .select(
-      "id, job_id, worker_id, status, message, proposed_rate, created_at, worker:profiles!job_applications_worker_id_fkey(full_name, avatar_url, phone)",
+      "id, job_id, worker_id, status, message, proposed_rate, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, worker:profiles!job_applications_worker_id_fkey(full_name, avatar_url, phone)",
     )
     .eq("job_id", jobId)
     .order("created_at", { ascending: true });
@@ -142,7 +158,7 @@ export async function listWorkerApplications(workerId: string) {
   const { data, error } = await supabaseAdmin
     .from("job_applications")
     .select(
-      "id, job_id, worker_id, status, message, proposed_rate, created_at, job:jobs!job_applications_job_id_fkey(id, title, status, address_label, budget_fixed, budget_min, budget_max, created_at, categories(name, icon_name, color_hex))",
+      "id, job_id, worker_id, status, message, proposed_rate, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, job:jobs!job_applications_job_id_fkey(id, title, status, address_label, budget_fixed, budget_min, budget_max, created_at, categories(name, icon_name, color_hex))",
     )
     .eq("worker_id", workerId)
     .in("status", ["pending", "accepted"])
@@ -186,7 +202,7 @@ export async function acceptApplication(clientId: string, jobId: string, applica
 
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
-    .select("id, client_id, status, worker_id")
+    .select("id, client_id, status, worker_id, job_mode")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -196,12 +212,19 @@ export async function acceptApplication(clientId: string, jobId: string, applica
   if (![JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status) || job.worker_id) {
     throw appError(409, "Job is no longer accepting applicants", "INVALID_JOB_STATE");
   }
-  await ensureWorkerHasNoActiveJob(application.worker_id, jobId);
+  // Scheduled jobs confirm the worker without blocking them: the job only
+  // becomes an active assignment (matched) near the scheduled time, so the
+  // worker's current workload is irrelevant here.
+  const isScheduled = job.job_mode === JOB_MODE.SCHEDULED;
+  if (!isScheduled) {
+    await ensureWorkerHasNoActiveJob(application.worker_id, jobId);
+  }
+  const nextStatus = isScheduled ? JOB_STATUS.SCHEDULED_CONFIRMED : JOB_STATUS.MATCHED;
 
   const now = new Date().toISOString();
   const { data: updatedJob, error: updateError } = await supabaseAdmin
     .from("jobs")
-    .update({ status: JOB_STATUS.MATCHED, worker_id: application.worker_id, updated_at: now })
+    .update({ status: nextStatus, worker_id: application.worker_id, updated_at: now })
     .eq("id", jobId)
     .eq("client_id", clientId)
     .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])

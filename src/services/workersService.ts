@@ -14,6 +14,8 @@ import {
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
 import * as applicationsService from "./applicationsService";
+import { recordWorkerCancellation } from "./jobsService";
+import { quotePreviewForWorker } from "./workerQuoteService";
 
 type WorkerStatsReview = {
   id: string;
@@ -156,8 +158,8 @@ export async function getNearby(query: unknown) {
   return result.slice(0, limit);
 }
 
-export async function acceptJob(userId: string, jobId: string) {
-  return applicationsService.applyToJob(userId, jobId);
+export async function acceptJob(userId: string, jobId: string, body?: { message?: unknown; proposed_rate?: unknown }) {
+  return applicationsService.applyToJob(userId, jobId, body);
 }
 
 export async function declineJob(userId: string, jobId: string) {
@@ -203,7 +205,7 @@ export async function updateWorkerProfile(userId: string, body: unknown) {
 export async function getActiveJob(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)")
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .eq("worker_id", userId)
     .in("status", WORKER_RECOVERABLE_JOB_STATUSES)
     .order("updated_at", { ascending: false })
@@ -236,14 +238,29 @@ async function transitionAssignedJob(
 }
 
 export async function markOnTheWay(userId: string, jobId: string) {
+  // Capture where the worker starts travelling from so travel cancellation
+  // compensation can be based on distance actually travelled.
+  const { data: workerLocation } = await supabaseAdmin
+    .from("workers")
+    .select("current_lat, current_lng")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const originUpdates: Record<string, unknown> = {};
+  if (workerLocation?.current_lat != null && workerLocation?.current_lng != null) {
+    originUpdates.worker_origin_lat = workerLocation.current_lat;
+    originUpdates.worker_origin_lng = workerLocation.current_lng;
+  }
+
   const data = await transitionAssignedJob(
     userId,
     jobId,
     [JOB_STATUS.MATCHED],
     JOB_STATUS.ON_THE_WAY,
     "Job can only be marked on the way after it is accepted",
+    originUpdates,
   );
-  await notifyService.notifyWorkerOnTheWay(data.client_id);
+  await notifyService.notifyWorkerOnTheWay(data.client_id, jobId);
   await supabaseAdmin
     .from("workers")
     .update({ is_available: false, updated_at: new Date().toISOString() })
@@ -259,7 +276,7 @@ export async function markArrived(userId: string, jobId: string) {
     JOB_STATUS.ARRIVED,
     "Job can only be marked arrived before work starts",
   );
-  await notifyService.notifyWorkerArrived(data.client_id);
+  await notifyService.notifyWorkerArrived(data.client_id, jobId);
   return data;
 }
 
@@ -273,7 +290,7 @@ export async function startJob(userId: string, jobId: string) {
     { started_at: new Date().toISOString() },
   );
 
-  await notifyService.notifyJobStarted(data.client_id);
+  await notifyService.notifyJobStarted(data.client_id, jobId);
   await supabaseAdmin
     .from("workers")
     .update({ is_available: false, updated_at: new Date().toISOString() })
@@ -288,6 +305,15 @@ export async function cancelAssignedJob(userId: string, jobId: string, body: unk
       ? String((body as { reason?: unknown }).reason ?? "").trim()
       : "";
 
+  // Snapshot the status before the atomic update so the ledger records the
+  // stage the worker abandoned the job at.
+  const { data: before } = await supabaseAdmin
+    .from("jobs")
+    .select("status")
+    .eq("id", jobId)
+    .eq("worker_id", userId)
+    .maybeSingle();
+
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .update({
@@ -299,12 +325,16 @@ export async function cancelAssignedJob(userId: string, jobId: string, body: unk
     })
     .eq("id", jobId)
     .eq("worker_id", userId)
-    .in("status", ACTIVE_WORKER_JOB_STATUSES)
+    .in("status", [...ACTIVE_WORKER_JOB_STATUSES, JOB_STATUS.SCHEDULED_CONFIRMED])
     .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex)")
     .maybeSingle();
 
   if (error) throw appError(500, error.message, "JOB_CANCEL_FAILED");
   if (!data) throw appError(409, "Only your active assigned jobs can be cancelled", "INVALID_JOB_STATE");
+
+  // Accountability: ledger entry + 30-day rolling cancel counter. The counter
+  // feeds the reliability factor in worker ranking.
+  await recordWorkerCancellation(jobId, userId, before?.status ?? JOB_STATUS.MATCHED, reason);
 
   // Reset worker's application status to withdrawn so it is no longer shown as active/accepted on their end
   const { error: appStatusError } = await supabaseAdmin
@@ -383,7 +413,7 @@ export async function getHistory(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, description, status, budget_fixed, budget_min, budget_max, budget_type, address_label, location_lat, location_lng, updated_at, cancelled_by, cancelled_reason, cancelled_at, categories(name, icon_name, color_hex), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at)",
+      "id, title, description, status, budget_fixed, budget_min, budget_max, budget_type, address_label, location_lat, location_lng, updated_at, cancelled_by, cancelled_reason, cancelled_at, categories(name, icon_name, color_hex), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)",
     )
     .eq("worker_id", userId)
     .in("status", [JOB_STATUS.COMPLETED, JOB_STATUS.CANCELLED])
@@ -418,7 +448,7 @@ export async function getJobRequests(userId: string) {
   const { data: openJobs, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, description, status, budget_min, budget_max, budget_fixed, budget_type, address_label, location_lat, location_lng, created_at, categories(name, icon_name, color_hex), client:profiles!jobs_client_id_fkey(full_name, avatar_url)",
+      "id, title, description, status, category_id, job_mode, budget_min, budget_max, budget_fixed, budget_type, address_label, location_lat, location_lng, created_at, categories(name, icon_name, color_hex), client:profiles!jobs_client_id_fkey(full_name, avatar_url)",
     )
     .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
     .is("worker_id", null)
@@ -454,7 +484,7 @@ export async function getJobRequests(userId: string) {
     return true;
   });
 
-  return finalJobs;
+  return Promise.all(finalJobs.map((job) => enrichJobWithWorkerQuote(job, userId)));
 }
 
 export async function getStats(userId: string) {
@@ -548,7 +578,7 @@ export async function getJobRequestById(userId: string, jobId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, description, status, budget_min, budget_max, budget_fixed, budget_type, address_label, location_lat, location_lng, created_at, photo_urls, categories(name, icon_name, color_hex), client:profiles!jobs_client_id_fkey(full_name, avatar_url)",
+      "id, title, description, status, category_id, job_mode, budget_min, budget_max, budget_fixed, budget_type, address_label, location_lat, location_lng, created_at, photo_urls, categories(name, icon_name, color_hex), client:profiles!jobs_client_id_fkey(full_name, avatar_url)",
     )
     .eq("id", jobId)
     .in("status", [JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING])
@@ -557,7 +587,23 @@ export async function getJobRequestById(userId: string, jobId: string) {
 
   if (error) throw appError(500, error.message, "JOB_FETCH_FAILED");
   if (!data) throw appError(409, "Job is no longer available", "JOB_NOT_AVAILABLE");
-  return data;
+  return enrichJobWithWorkerQuote(data, userId);
+}
+
+async function enrichJobWithWorkerQuote<T extends { id: string; category_id?: string | null }>(
+  job: T,
+  workerId: string,
+) {
+  const quoteJob = {
+    id: job.id,
+    category_id: job.category_id ?? "",
+    location_lat: (job as { location_lat?: number | null }).location_lat ?? null,
+    location_lng: (job as { location_lng?: number | null }).location_lng ?? null,
+    job_mode: (job as { job_mode?: string | null }).job_mode ?? null,
+  };
+  if (!quoteJob.category_id) return job;
+  const quote = await quotePreviewForWorker(quoteJob, workerId);
+  return quote ? { ...job, application_quote: quote } : job;
 }
 
 function responseTimeStats(dispatches: Array<{ created_at: string | null; responded_at: string | null }>) {
