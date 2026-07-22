@@ -34,3 +34,24 @@ scripts/seed-lib/
 scripts/seed-reset-dev.ts
 scripts/verify-seed.ts
 
+# AI assistants & tooling
+.agents/
+.gemini/
+.claude/
+.cursor/
+.cursorrules
+.copilot/
+.aider*
+.windsurf/
+.v0/
+.antigravity/
+.brain/
+.system_generated/
+*.prompt
+*.prompts
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+CHAT.md
+
+
