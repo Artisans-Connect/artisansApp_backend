@@ -420,8 +420,8 @@ export async function recordDecline(jobId: string, workerId: string): Promise<vo
   if (active === 0) {
     const state = getState(jobId);
     if (state.timeout) clearTimeout(state.timeout);
-    if (state.round >= MATCHING.MAX_ROUNDS) {
-      if (job.job_mode !== "scheduled") await expireJob(jobId);
+    if (job.requested_worker_id || state.round >= MATCHING.MAX_ROUNDS) {
+      if (job.job_mode !== "scheduled" || job.requested_worker_id) await expireJob(jobId);
     } else {
       await findAndDispatch(jobId, state.round + 1);
     }

@@ -87,7 +87,10 @@ export async function applyToJob(workerId: string, jobId: string, body?: ApplyTo
         worker_id: workerId,
         status: "pending",
         message: patch.message,
-        proposed_rate: quote.total_quote,
+        proposed_rate:
+          typeof patch.proposed_rate === "number" && patch.proposed_rate > 0
+            ? patch.proposed_rate
+            : quote.total_quote,
         distance_km: quote.distance_km,
         distance_cost: quote.distance_cost,
         base_service_fee: quote.base_service_fee,

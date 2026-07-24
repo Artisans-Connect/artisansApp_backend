@@ -182,6 +182,13 @@ export async function getProfile(userId: string) {
     .select("photo_urls, jobs(status)")
     .eq("worker_id", userId);
 
+  // Also fetch client job photos uploaded at job creation for completed jobs
+  const { data: completedJobs } = await supabaseAdmin
+    .from("jobs")
+    .select("photo_urls")
+    .eq("worker_id", userId)
+    .eq("status", "completed");
+
   const jobImages: string[] = [];
   if (completions) {
     for (const comp of completions) {
@@ -191,6 +198,13 @@ export async function getProfile(userId: string) {
         if (!job || status === "completed" || status === "pending_client_approval") {
           jobImages.push(...comp.photo_urls);
         }
+      }
+    }
+  }
+  if (completedJobs) {
+    for (const j of completedJobs) {
+      if (j.photo_urls && Array.isArray(j.photo_urls)) {
+        jobImages.push(...j.photo_urls);
       }
     }
   }

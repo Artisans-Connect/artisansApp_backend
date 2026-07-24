@@ -216,7 +216,27 @@ export async function listConversations(userId: string) {
     }
   }
 
-  return Array.from(uniqueConversations.values()).sort(
+  // Query unread messages for this user
+  const { data: unreadMsgs } = await supabaseAdmin
+    .from("messages")
+    .select("job_id, conversation_id")
+    .neq("sender_id", userId)
+    .eq("is_read", false);
+
+  const unreadMap = new Map<string, number>();
+  for (const m of unreadMsgs ?? []) {
+    const key = m.job_id || m.conversation_id;
+    if (key) {
+      unreadMap.set(key, (unreadMap.get(key) ?? 0) + 1);
+    }
+  }
+
+  const result = Array.from(uniqueConversations.values()).map((c) => ({
+    ...c,
+    unread_count: unreadMap.get(c.id) ?? 0,
+  }));
+
+  return result.sort(
     (a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime(),
   );
 }
