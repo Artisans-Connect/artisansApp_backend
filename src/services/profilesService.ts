@@ -32,9 +32,13 @@ function metadataString(value: unknown): string {
 
 function readAuthProfileMetadata(metadata: Record<string, unknown> | null | undefined) {
   return {
-    full_name: metadataString(metadata?.full_name) || metadataString(metadata?.name),
+    full_name:
+      metadataString(metadata?.full_name) ||
+      metadataString(metadata?.name) ||
+      metadataString(metadata?.user_name) ||
+      metadataString(metadata?.preferred_username),
     avatar_url: metadataString(metadata?.avatar_url) || metadataString(metadata?.picture),
-    phone: metadataString(metadata?.phone),
+    phone: metadataString(metadata?.phone) || metadataString(metadata?.phone_number),
   };
 }
 
