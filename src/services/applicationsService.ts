@@ -271,3 +271,30 @@ export async function acceptApplication(clientId: string, jobId: string, applica
 
   return updatedJob;
 }
+
+export async function withdrawApplication(workerId: string, jobId: string) {
+  const { data: app, error: fetchError } = await supabaseAdmin
+    .from("job_applications")
+    .select("status")
+    .eq("job_id", jobId)
+    .eq("worker_id", workerId)
+    .maybeSingle();
+
+  if (fetchError) throw appError(500, fetchError.message, "FETCH_APPLICATION_FAILED");
+  if (!app) throw appError(404, "Application not found", "APPLICATION_NOT_FOUND");
+  if (app.status !== "pending") {
+    throw appError(400, "Only pending applications can be withdrawn", "INVALID_APPLICATION_STATE");
+  }
+
+  const { error: updateError } = await supabaseAdmin
+    .from("job_applications")
+    .update({ status: "withdrawn", updated_at: new Date().toISOString() })
+    .eq("job_id", jobId)
+    .eq("worker_id", workerId);
+
+  if (updateError) throw appError(500, updateError.message, "WITHDRAW_APPLICATION_FAILED");
+
+  await matchingService.recordDecline(jobId, workerId);
+
+  return { success: true };
+}

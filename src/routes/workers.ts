@@ -115,6 +115,15 @@ router.get(
   }),
 );
 
+router.post(
+  "/applications/:jobId/withdraw",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await applicationsService.withdrawApplication(req.user!.id, paramId(req.params.jobId));
+    res.status(200).json(result);
+  }),
+);
+
 router.get(
   "/me/history",
   authMiddleware,

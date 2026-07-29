@@ -325,12 +325,16 @@ export async function cancelAssignedJob(userId: string, jobId: string, body: unk
     })
     .eq("id", jobId)
     .eq("worker_id", userId)
-    .in("status", [...ACTIVE_WORKER_JOB_STATUSES, JOB_STATUS.SCHEDULED_CONFIRMED])
+    .in("status", [
+      ...ACTIVE_WORKER_JOB_STATUSES,
+      JOB_STATUS.SCHEDULED_CONFIRMED,
+      JOB_STATUS.PENDING_CLIENT_APPROVAL,
+    ])
     .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex)")
     .maybeSingle();
 
   if (error) throw appError(500, error.message, "JOB_CANCEL_FAILED");
-  if (!data) throw appError(409, "Only your active assigned jobs can be cancelled", "INVALID_JOB_STATE");
+  if (!data) throw appError(409, "Only your active assigned or pending approval jobs can be cancelled", "INVALID_JOB_STATE");
 
   // Accountability: ledger entry + 30-day rolling cancel counter. The counter
   // feeds the reliability factor in worker ranking.
