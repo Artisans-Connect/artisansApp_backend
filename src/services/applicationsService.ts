@@ -79,6 +79,10 @@ export async function applyToJob(workerId: string, jobId: string, body?: ApplyTo
 
   const patch = readApplicationInput(body);
   const quote = await quoteForWorkerApplication(jobId, workerId);
+  const effectiveTotalQuote =
+    typeof patch.proposed_rate === "number" && patch.proposed_rate > 0
+      ? patch.proposed_rate
+      : quote.total_quote;
   const { data: application, error } = await supabaseAdmin
     .from("job_applications")
     .upsert(
@@ -87,15 +91,12 @@ export async function applyToJob(workerId: string, jobId: string, body?: ApplyTo
         worker_id: workerId,
         status: "pending",
         message: patch.message,
-        proposed_rate:
-          typeof patch.proposed_rate === "number" && patch.proposed_rate > 0
-            ? patch.proposed_rate
-            : quote.total_quote,
+        proposed_rate: patch.proposed_rate,
         distance_km: quote.distance_km,
         distance_cost: quote.distance_cost,
         base_service_fee: quote.base_service_fee,
         urgency_premium: quote.urgency_premium,
-        total_quote: quote.total_quote,
+        total_quote: effectiveTotalQuote,
         quote_currency: quote.quote_currency,
         quoted_at: quote.quoted_at,
       },

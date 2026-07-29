@@ -625,7 +625,7 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
     .from("jobs")
     .update(buildReopenAfterWorkerCancelPatch(new Date().toISOString(), expiresAt))
     .eq("id", jobId)
-    .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
+    .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, is_verified)")
     .single();
 
   if (error) {
@@ -901,7 +901,7 @@ export async function reopenJob(userId: string, jobId: string, body: unknown) {
 export async function getMyJobs(userId: string, statusFilter?: string[]) {
   let query = supabaseAdmin
     .from("jobs")
-    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, scheduled_for, work_ended_at, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, cancellation_stage, cancellation_fee, cancellation_fee_currency, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
+    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, scheduled_for, work_ended_at, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, cancellation_stage, cancellation_fee, cancellation_fee_currency, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, is_verified), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone, is_verified), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .eq("client_id", userId)
     .order("created_at", { ascending: false });
 
@@ -911,7 +911,23 @@ export async function getMyJobs(userId: string, statusFilter?: string[]) {
 
   const { data, error } = await query;
   if (error) throw appError(500, error.message, "JOBS_FETCH_FAILED");
-  return data ?? [];
+  const jobs = data ?? [];
+  const jobIds = jobs.map((job) => job.id).filter(Boolean);
+  if (jobIds.length === 0) return jobs;
+
+  const { data: reviews, error: reviewsError } = await supabaseAdmin
+    .from("reviews")
+    .select("job_id, rating")
+    .eq("reviewer_id", userId)
+    .in("job_id", jobIds);
+
+  if (reviewsError) throw appError(500, reviewsError.message, "JOB_REVIEWS_FETCH_FAILED");
+
+  const ratingByJobId = new Map((reviews ?? []).map((review) => [review.job_id, review.rating]));
+  return jobs.map((job) => ({
+    ...job,
+    client_review_rating: ratingByJobId.get(job.id) ?? null,
+  }));
 }
 
 export async function getMatchingProgress(userId: string, jobId: string) {
@@ -956,7 +972,7 @@ export async function getMatchingProgress(userId: string, jobId: string) {
 export async function getJobById(userId: string, jobId: string) {
   const { data: job, error } = await supabaseAdmin
     .from("jobs")
-    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, is_verified), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -968,5 +984,17 @@ export async function getJobById(userId: string, jobId: string) {
     throw appError(403, "Not authorized to view this job", "FORBIDDEN");
   }
 
-  return job;
+  const { data: review, error: reviewError } = await supabaseAdmin
+    .from("reviews")
+    .select("rating")
+    .eq("job_id", jobId)
+    .eq("reviewer_id", userId)
+    .maybeSingle();
+
+  if (reviewError) throw appError(500, reviewError.message, "JOB_REVIEW_FETCH_FAILED");
+
+  return {
+    ...job,
+    client_review_rating: review?.rating ?? null,
+  };
 }

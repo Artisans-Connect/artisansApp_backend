@@ -212,7 +212,25 @@ export async function getActiveJob(userId: string) {
     .maybeSingle();
 
   if (error) throw appError(500, error.message, "ACTIVE_JOB_FETCH_FAILED");
-  return data;
+  return data ? enrichActiveJobWithAcceptedQuote(data, userId) : data;
+}
+
+async function enrichActiveJobWithAcceptedQuote<T extends { id: string }>(
+  job: T,
+  workerId: string,
+) {
+  const { data: quote, error } = await supabaseAdmin
+    .from("job_applications")
+    .select("proposed_rate, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at")
+    .eq("job_id", job.id)
+    .eq("worker_id", workerId)
+    .in("status", ["accepted", "pending"])
+    .order("status", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "APPLICATION_QUOTE_FETCH_FAILED");
+  return quote ? { ...job, application_quote: quote } : job;
 }
 
 async function transitionAssignedJob(
