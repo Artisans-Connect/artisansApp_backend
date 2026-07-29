@@ -288,7 +288,7 @@ export async function withdrawApplication(workerId: string, jobId: string) {
 
   const { error: updateError } = await supabaseAdmin
     .from("job_applications")
-    .update({ status: "withdrawn", updated_at: new Date().toISOString() })
+    .update({ status: "withdrawn" })
     .eq("job_id", jobId)
     .eq("worker_id", workerId);
 
