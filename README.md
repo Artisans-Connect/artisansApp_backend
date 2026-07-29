@@ -69,6 +69,56 @@ src/
 
 For a detailed breakdown of available endpoints and architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+## App Release Delivery
+
+The verification portal reads app download links from:
+
+```text
+GET /api/releases/app
+```
+
+The endpoint supports two release-delivery modes:
+
+1. Manifest mode for a CI/CD pipeline:
+   - Set `CRAFTMATCH_RELEASE_MANIFEST_PATH` to a JSON file written by the release job, or
+   - Set `CRAFTMATCH_RELEASE_MANIFEST_JSON` to the same JSON payload.
+2. Environment fallback mode:
+   - `CRAFTMATCH_ANDROID_DOWNLOAD_URL`
+   - `CRAFTMATCH_IOS_DOWNLOAD_URL`
+   - `CRAFTMATCH_WINDOWS_DOWNLOAD_URL`
+   - `CRAFTMATCH_MACOS_DOWNLOAD_URL`
+   - `CRAFTMATCH_WEB_APP_URL`
+   - Optional: `CRAFTMATCH_APP_VERSION`, `CRAFTMATCH_RELEASE_UPDATED_AT`
+
+Example manifest:
+
+```json
+{
+  "appName": "CraftMatch",
+  "latestVersion": "1.0.3",
+  "updatedAt": "2026-07-29T12:00:00.000Z",
+  "links": [
+    {
+      "platform": "android",
+      "href": "https://downloads.example.com/craftmatch-1.0.3.apk",
+      "version": "1.0.3"
+    },
+    {
+      "platform": "web",
+      "href": "https://app.example.com",
+      "version": "1.0.3"
+    }
+  ]
+}
+```
+
+Recommended pipeline shape:
+
+1. Build the app package for each target platform.
+2. Upload the package to durable storage or the target store/TestFlight channel.
+3. Write or update the release manifest with the new URLs and version.
+4. Deploy or refresh the backend environment so `/api/releases/app` serves the new release.
+
 ## Database
 
 The project uses Supabase as its primary database. Migrations and types are located in the `supabase/` directory.
