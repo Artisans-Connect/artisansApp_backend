@@ -87,7 +87,7 @@ The endpoint supports two release-delivery modes:
    - `CRAFTMATCH_IOS_DOWNLOAD_URL`
    - `CRAFTMATCH_WINDOWS_DOWNLOAD_URL`
    - `CRAFTMATCH_MACOS_DOWNLOAD_URL`
-   - `CRAFTMATCH_WEB_APP_URL`
+   - `CRAFTMATCH_WEB_APP_URL` (defaults to `https://artisans-app-frontend.vercel.app/`)
    - Optional: `CRAFTMATCH_APP_VERSION`, `CRAFTMATCH_RELEASE_UPDATED_AT`
 
 Example manifest:
@@ -105,7 +105,7 @@ Example manifest:
     },
     {
       "platform": "web",
-      "href": "https://app.example.com",
+      "href": "https://artisans-app-frontend.vercel.app/",
       "version": "1.0.3"
     }
   ]

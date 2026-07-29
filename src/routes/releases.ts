@@ -61,7 +61,7 @@ const platformConfigs: PlatformConfig[] = [
   },
   {
     platform: "web",
-    label: "Web App",
+    label: "Web PWA",
     envKey: "CRAFTMATCH_WEB_APP_URL",
     minRequirement: "Latest Chrome, Edge, Safari, or Firefox",
     external: true,
@@ -69,7 +69,9 @@ const platformConfigs: PlatformConfig[] = [
 ];
 
 function releaseLink(config: PlatformConfig): AppReleaseLink {
-  const href = process.env[config.envKey]?.trim() ?? "";
+  const href =
+    process.env[config.envKey]?.trim() ||
+    (config.platform === "web" ? "https://artisans-app-frontend.vercel.app/" : "");
   return {
     platform: config.platform,
     label: config.label,
