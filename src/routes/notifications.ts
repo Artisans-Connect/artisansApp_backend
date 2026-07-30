@@ -10,8 +10,13 @@ router.get(
   "/",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
-    const limit = Number(req.query.limit ?? 50);
-    const notifications = await notificationsService.listNotifications(req.user!.id, Number.isFinite(limit) ? limit : 50);
+    const limit = Number(req.query.limit ?? 20);
+    const offset = Number(req.query.offset ?? 0);
+    const notifications = await notificationsService.listNotifications(
+      req.user!.id,
+      Number.isFinite(limit) ? limit : 20,
+      Number.isFinite(offset) ? offset : 0
+    );
     res.status(200).json({ success: true, data: notifications });
   }),
 );
@@ -40,6 +45,15 @@ router.patch(
   catchAsync(async (req: Request, res: Response) => {
     const notification = await notificationsService.markNotificationRead(req.user!.id, paramId(req.params.id));
     res.status(200).json({ success: true, data: notification });
+  }),
+);
+
+router.delete(
+  "/:id",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    await notificationsService.deleteNotification(req.user!.id, paramId(req.params.id));
+    res.status(200).json({ success: true });
   }),
 );
 

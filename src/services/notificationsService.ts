@@ -1,13 +1,13 @@
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
 
-export async function listNotifications(userId: string, limit = 50) {
+export async function listNotifications(userId: string, limit = 20, offset = 0) {
   const { data, error } = await supabaseAdmin
     .from("notifications")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
-    .limit(limit);
+    .range(offset, offset + limit - 1);
 
   if (error) throw appError(500, error.message, "NOTIFICATIONS_FETCH_FAILED");
   return data ?? [];
@@ -46,5 +46,16 @@ export async function markAllNotificationsRead(userId: string) {
     .is("read_at", null);
 
   if (error) throw appError(500, error.message, "NOTIFICATIONS_READ_ALL_FAILED");
+  return { success: true };
+}
+
+export async function deleteNotification(userId: string, notificationId: string) {
+  const { error } = await supabaseAdmin
+    .from("notifications")
+    .delete()
+    .eq("id", notificationId)
+    .eq("user_id", userId);
+
+  if (error) throw appError(500, error.message, "NOTIFICATION_DELETE_FAILED");
   return { success: true };
 }

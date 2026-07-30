@@ -249,7 +249,7 @@ function previewContent(msg: { content?: string | null; image_urls?: string[] | 
   return "";
 }
 
-export async function getMessages(userId: string, conversationId: string) {
+export async function getMessages(userId: string, conversationId: string, limit = 30, offset = 0) {
   const conversation = await assertConversationParticipant(userId, conversationId);
 
   let query = supabaseAdmin
@@ -259,10 +259,12 @@ export async function getMessages(userId: string, conversationId: string) {
     ? query.eq("conversation_id", conversationId)
     : query.eq("job_id", conversationId);
 
-  const { data, error } = await query.order("created_at", { ascending: true });
+  const { data, error } = await query
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
 
   if (error) throw appError(500, error.message, "MESSAGES_FETCH_FAILED");
-  return data ?? [];
+  return (data ?? []).reverse();
 }
 
 export async function sendMessage(userId: string, conversationId: string, body: unknown) {
@@ -318,4 +320,19 @@ export async function sendMessage(userId: string, conversationId: string, body: 
   }
 
   return data;
+}
+
+export async function deleteConversation(userId: string, conversationId: string) {
+  const direct = await assertDirectParticipant(userId, conversationId);
+  if (!direct) {
+    throw appError(404, "Direct conversation not found or you are not a participant", "NOT_FOUND");
+  }
+
+  const { error } = await supabaseAdmin
+    .from("direct_conversations")
+    .delete()
+    .eq("id", conversationId);
+
+  if (error) throw appError(500, error.message, "DELETE_CONVERSATION_FAILED");
+  return { success: true };
 }

@@ -28,7 +28,14 @@ router.get(
   "/:id/messages",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
-    const messages = await chatService.getMessages(req.user!.id, paramId(req.params.id));
+    const limit = Number(req.query.limit ?? 30);
+    const offset = Number(req.query.offset ?? 0);
+    const messages = await chatService.getMessages(
+      req.user!.id,
+      paramId(req.params.id),
+      Number.isFinite(limit) ? limit : 30,
+      Number.isFinite(offset) ? offset : 0
+    );
     res.status(200).json({ success: true, data: messages });
   }),
 );
@@ -39,6 +46,15 @@ router.post(
   catchAsync(async (req: Request, res: Response) => {
     const message = await chatService.sendMessage(req.user!.id, paramId(req.params.id), req.body);
     res.status(201).json({ success: true, data: message });
+  }),
+);
+
+router.delete(
+  "/:id",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    await chatService.deleteConversation(req.user!.id, paramId(req.params.id));
+    res.status(200).json({ success: true });
   }),
 );
 
