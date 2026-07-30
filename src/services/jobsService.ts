@@ -625,7 +625,7 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
     .from("jobs")
     .update(buildReopenAfterWorkerCancelPatch(new Date().toISOString(), expiresAt))
     .eq("id", jobId)
-    .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, is_verified)")
+    .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, workers(is_verified))")
     .single();
 
   if (error) {
@@ -640,7 +640,7 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
   }
 
   void matchingService.findAndDispatch(jobId, 1);
-  return data;
+  return enrichJobVerification(data);
 }
 
 /**
@@ -898,10 +898,29 @@ export async function reopenJob(userId: string, jobId: string, body: unknown) {
   return data;
 }
 
+function enrichJobVerification(job: any) {
+  if (!job) return job;
+  if (job.worker) {
+    const workers = job.worker.workers;
+    job.worker.is_verified = Array.isArray(workers)
+      ? workers[0]?.is_verified ?? false
+      : workers?.is_verified ?? false;
+    delete job.worker.workers;
+  }
+  if (job.requested_worker) {
+    const workers = job.requested_worker.workers;
+    job.requested_worker.is_verified = Array.isArray(workers)
+      ? workers[0]?.is_verified ?? false
+      : workers?.is_verified ?? false;
+    delete job.requested_worker.workers;
+  }
+  return job;
+}
+
 export async function getMyJobs(userId: string, statusFilter?: string[]) {
   let query = supabaseAdmin
     .from("jobs")
-    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, scheduled_for, work_ended_at, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, cancellation_stage, cancellation_fee, cancellation_fee_currency, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, is_verified), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone, is_verified), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
+    .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, scheduled_for, work_ended_at, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, cancellation_stage, cancellation_fee, cancellation_fee_currency, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, workers(is_verified)), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone, workers(is_verified)), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .eq("client_id", userId)
     .order("created_at", { ascending: false });
 
@@ -925,7 +944,7 @@ export async function getMyJobs(userId: string, statusFilter?: string[]) {
 
   const ratingByJobId = new Map((reviews ?? []).map((review) => [review.job_id, review.rating]));
   return jobs.map((job) => ({
-    ...job,
+    ...enrichJobVerification(job),
     client_review_rating: ratingByJobId.get(job.id) ?? null,
   }));
 }
@@ -972,7 +991,7 @@ export async function getMatchingProgress(userId: string, jobId: string) {
 export async function getJobById(userId: string, jobId: string) {
   const { data: job, error } = await supabaseAdmin
     .from("jobs")
-    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, is_verified), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
+    .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, workers(is_verified)), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -994,7 +1013,7 @@ export async function getJobById(userId: string, jobId: string) {
   if (reviewError) throw appError(500, reviewError.message, "JOB_REVIEW_FETCH_FAILED");
 
   return {
-    ...job,
+    ...enrichJobVerification(job),
     client_review_rating: review?.rating ?? null,
   };
 }
