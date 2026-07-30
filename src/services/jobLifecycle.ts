@@ -80,6 +80,16 @@ export function isRedispatchBlockingDispatchStatus(status: string | null | undef
   );
 }
 
+export function hasMatchingWindowExpired(
+  expiresAt: string | null | undefined,
+  now = new Date(),
+): boolean {
+  if (!expiresAt) return true;
+  const expiresAtMs = new Date(expiresAt).getTime();
+  if (!Number.isFinite(expiresAtMs)) return true;
+  return expiresAtMs <= now.getTime();
+}
+
 export function buildReopenAfterWorkerCancelPatch(updatedAt: string, expiresAt: string | null) {
   return {
     status: JOB_STATUS.MATCHING,

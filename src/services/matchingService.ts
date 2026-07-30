@@ -9,6 +9,7 @@ import {
   REDISPATCH_BLOCKING_DISPATCH_STATUSES,
   SCHEDULED_JOB_ACTIVATION_LEAD_MS,
   WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
+  hasMatchingWindowExpired,
   isWorkerActiveJobConstraintError,
   shouldActivateScheduledJob,
 } from "./jobLifecycle";
@@ -351,9 +352,12 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
 
   if (batch.length === 0) {
     if (round >= MATCHING.MAX_ROUNDS) {
-      // Scheduled jobs are never expired by round exhaustion — their
-      // expires_at (slot + buffer) cron is the only expiry authority.
-      if (job.job_mode !== "scheduled") await expireJob(jobId);
+      // Round exhaustion pauses the search; expires_at decides when it ends.
+      if (hasMatchingWindowExpired(job.expires_at)) {
+        await expireJob(jobId);
+      } else {
+        scheduleReDispatch(jobId, 0);
+      }
     } else {
       scheduleReDispatch(jobId, round);
     }
@@ -395,7 +399,11 @@ export async function checkAndReDispatch(jobId: string, round: number): Promise<
   await expireTimedOutDispatches(jobId);
 
   if (round >= MATCHING.MAX_ROUNDS) {
-    if (job.job_mode !== "scheduled") await expireJob(jobId);
+    if (hasMatchingWindowExpired(job.expires_at)) {
+      await expireJob(jobId);
+    } else {
+      await findAndDispatch(jobId, 1);
+    }
     return;
   }
 
@@ -421,7 +429,11 @@ export async function recordDecline(jobId: string, workerId: string): Promise<vo
     const state = getState(jobId);
     if (state.timeout) clearTimeout(state.timeout);
     if (job.requested_worker_id || state.round >= MATCHING.MAX_ROUNDS) {
-      if (job.job_mode !== "scheduled" || job.requested_worker_id) await expireJob(jobId);
+      if (hasMatchingWindowExpired(job.expires_at)) {
+        await expireJob(jobId);
+      } else {
+        await findAndDispatch(jobId, 1);
+      }
     } else {
       await findAndDispatch(jobId, state.round + 1);
     }
@@ -477,7 +489,12 @@ export async function recoverTimedOutMatchingJobs(): Promise<void> {
 
     const round = await getLatestDispatchRound(job.id);
     if (round >= MATCHING.MAX_ROUNDS) {
-      await expireJob(job.id);
+      const fullJob = await fetchJob(job.id);
+      if (hasMatchingWindowExpired(fullJob?.expires_at)) {
+        await expireJob(job.id);
+      } else {
+        await findAndDispatch(job.id, 1);
+      }
     } else {
       await findAndDispatch(job.id, round + 1);
     }

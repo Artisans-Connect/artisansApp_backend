@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildReopenAfterWorkerCancelPatch,
+  hasMatchingWindowExpired,
   isActiveWorkerJobStatus,
   isRedispatchBlockingDispatchStatus,
   isRecoverableServiceInterruption,
@@ -120,4 +121,29 @@ test("only active dispatches block a worker from renewed redispatch", () => {
   for (const status of ["declined", "expired", "cancelled", "withdrawn", null]) {
     assert.equal(isRedispatchBlockingDispatchStatus(status), false);
   }
+});
+
+test("matching search window remains open until expires_at", () => {
+  const now = new Date("2026-07-30T12:00:00.000Z");
+
+  assert.equal(
+    hasMatchingWindowExpired("2026-07-30T12:30:00.000Z", now),
+    false,
+  );
+  assert.equal(
+    hasMatchingWindowExpired("2026-07-30T12:00:00.000Z", now),
+    true,
+  );
+  assert.equal(
+    hasMatchingWindowExpired("2026-07-30T11:59:59.000Z", now),
+    true,
+  );
+});
+
+test("missing or invalid matching expiry is treated as expired", () => {
+  const now = new Date("2026-07-30T12:00:00.000Z");
+
+  assert.equal(hasMatchingWindowExpired(null, now), true);
+  assert.equal(hasMatchingWindowExpired(undefined, now), true);
+  assert.equal(hasMatchingWindowExpired("not-a-date", now), true);
 });
