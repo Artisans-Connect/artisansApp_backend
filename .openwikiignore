@@ -1,0 +1,15 @@
+# Secrets and local configuration
+.env
+.env.*
+
+# Dependencies, build output, and tool state
+node_modules/
+dist/
+supabase/.temp/
+
+# Generated or non-production experiment artifacts
+scripts/experiments/results/
+all_migrations.txt
+
+# Keep generated OpenWiki pages out of their own source scan.
+openwiki/
