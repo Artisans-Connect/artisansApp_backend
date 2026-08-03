@@ -30,12 +30,19 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Install and launch Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          sleep 5
+          ollama pull qwen2.5-coder:7b
       - name: Update OpenWiki
         run: npm run docs:wiki:update
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENWIKI_PROVIDER: openrouter
-          OPENWIKI_MODEL_ID: z-ai/glm-5.2
+          OPENWIKI_PROVIDER: openai-compatible
+          OPENAI_COMPATIBLE_BASE_URL: http://localhost:11434/v1
+          OPENAI_COMPATIBLE_API_KEY: ollama
+          OPENWIKI_MODEL_ID: qwen2.5-coder:7b
           OPENWIKI_TELEMETRY_DISABLED: "1"
       - name: Create or update documentation pull request
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7

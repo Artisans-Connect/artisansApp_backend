@@ -9,12 +9,10 @@ try {
   // Some repos only use dotenv through OpenWiki's dependency tree.
 }
 
-const apiKey = process.env.OPENROUTER_API_KEY || process.env.OPenRouter_OPENWIKI_KEY;
-
-if (!apiKey) {
-  console.error("OpenWiki requires OPENROUTER_API_KEY or OPenRouter_OPENWIKI_KEY in .env.");
-  process.exit(1);
-}
+const apiKey = process.env.OPENAI_COMPATIBLE_API_KEY || process.env.OPENROUTER_API_KEY || process.env.OPenRouter_OPENWIKI_KEY || "ollama";
+const baseUrl = process.env.OPENAI_COMPATIBLE_BASE_URL || "http://localhost:11434/v1";
+const provider = process.env.OPENWIKI_PROVIDER || "openai-compatible";
+const modelId = process.env.OPENWIKI_MODEL_ID || "qwen2.5-coder:7b";
 
 const executable = process.platform === "win32" ? "openwiki.cmd" : "openwiki";
 const localBin = path.join(__dirname, "..", "node_modules", ".bin", executable);
@@ -23,9 +21,10 @@ const result = spawnSync(localBin, ["code", ...process.argv.slice(2)], {
   shell: process.platform === "win32",
   env: {
     ...process.env,
-    OPENWIKI_PROVIDER: process.env.OPENWIKI_PROVIDER || "openrouter",
-    OPENWIKI_MODEL_ID: process.env.OPENWIKI_MODEL_ID || "z-ai/glm-5.2",
-    OPENROUTER_API_KEY: apiKey,
+    OPENWIKI_PROVIDER: provider,
+    OPENAI_COMPATIBLE_BASE_URL: baseUrl,
+    OPENAI_COMPATIBLE_API_KEY: apiKey,
+    OPENWIKI_MODEL_ID: modelId,
   },
 });
 
