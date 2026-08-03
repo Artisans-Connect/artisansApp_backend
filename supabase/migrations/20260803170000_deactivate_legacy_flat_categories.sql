@@ -35,9 +35,8 @@ UPDATE subcategories
 SET category_id = (SELECT id FROM categories WHERE slug = 'electronics_it' LIMIT 1)
 WHERE category_id IN (SELECT id FROM categories WHERE slug IN ('ict_support'));
 
--- 2. Deactivate legacy flat categories
-UPDATE categories
-SET is_active = false
+-- 2. Delete legacy flat categories
+DELETE FROM categories
 WHERE slug IN (
   'plumbing',
   'electrical',
