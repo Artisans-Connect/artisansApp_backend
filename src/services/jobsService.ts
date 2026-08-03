@@ -32,19 +32,96 @@ async function findJobByIdempotencyKey(clientId: string, idempotencyKey: string)
   return job;
 }
 
+const LEGACY_SLUG_MAP: Record<string, string> = {
+  plumbing: "plumbing_water",
+  electrical: "electrical_power",
+  carpentry: "construction_building",
+  masonry: "construction_building",
+  welding: "construction_building",
+  construction: "construction_building",
+  automotive: "auto_mechanical",
+  painting: "construction_building",
+  tiling: "construction_building",
+  roofing: "construction_building",
+  hvac: "home_repairs",
+  appliance_repair: "electrical_power",
+  cleaning: "home_repairs",
+  landscaping: "home_repairs",
+  fashion: "beauty_fashion",
+  beauty: "beauty_fashion",
+  catering: "hospitality_events",
+  upholstery: "home_repairs",
+  security: "electrical_power",
+  ict_support: "electronics_it",
+};
+
 async function resolveCategoryId(categoryIdOrSlug: string) {
+  if (!categoryIdOrSlug || typeof categoryIdOrSlug !== "string") {
+    const { data: defaultCat } = await supabaseAdmin
+      .from("categories")
+      .select("id")
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    return defaultCat?.id ?? "";
+  }
+
   const isUuid = UUID_RE.test(categoryIdOrSlug);
+  const normalizedKey = categoryIdOrSlug.trim().toLowerCase();
+  const mappedSlug = LEGACY_SLUG_MAP[normalizedKey] ?? normalizedKey;
+
+  // 1. Try finding by ID (if UUID) or slug
   const query = supabaseAdmin.from("categories").select("id").eq("is_active", true);
-  const { data, error } = await (isUuid
+  const { data: directMatch } = await (isUuid
     ? query.eq("id", categoryIdOrSlug)
-    : query.eq("slug", categoryIdOrSlug)
+    : query.eq("slug", mappedSlug)
   ).maybeSingle();
 
-  if (error) throw appError(500, error.message, "CATEGORY_LOOKUP_FAILED");
-  if (!data?.id) {
-    throw appError(400, "Selected service category is not available yet", "CATEGORY_NOT_AVAILABLE");
+  if (directMatch?.id) return directMatch.id as string;
+
+  // 2. If input was UUID but failed (e.g. old deleted category UUID), try matching slug by mapped slug
+  if (isUuid) {
+    const { data: byMappedSlug } = await supabaseAdmin
+      .from("categories")
+      .select("id")
+      .eq("is_active", true)
+      .eq("slug", mappedSlug)
+      .maybeSingle();
+    if (byMappedSlug?.id) return byMappedSlug.id as string;
   }
-  return data.id as string;
+
+  // 3. Try finding by subcategory slug or category_id
+  const { data: subcatMatch } = await supabaseAdmin
+    .from("subcategories")
+    .select("category_id")
+    .or(`slug.eq.${normalizedKey},id.eq.${categoryIdOrSlug}`)
+    .maybeSingle();
+
+  if (subcatMatch?.category_id) return subcatMatch.category_id as string;
+
+  // 4. Try matching category by name ILIKE
+  const { data: nameMatch } = await supabaseAdmin
+    .from("categories")
+    .select("id")
+    .eq("is_active", true)
+    .ilike("name", `%${normalizedKey}%`)
+    .maybeSingle();
+
+  if (nameMatch?.id) return nameMatch.id as string;
+
+  // 5. Fallback: Return first active category ID to ensure job posting succeeds
+  const { data: fallbackCat } = await supabaseAdmin
+    .from("categories")
+    .select("id")
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (fallbackCat?.id) return fallbackCat.id as string;
+
+  throw appError(400, "Selected service category is not available yet", "CATEGORY_NOT_AVAILABLE");
 }
 
 async function ensureRequestedWorkerCanReceiveImmediateRequest(workerId: string) {

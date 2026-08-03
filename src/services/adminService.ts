@@ -12,6 +12,7 @@ const categorySchema = z.object({
   description: nullableText,
   sort_order: z.coerce.number().int().min(0).default(0),
   is_active: z.boolean().default(true),
+  base_fee: z.coerce.number().min(0).default(60),
 });
 
 const categoryPatchSchema = categorySchema.partial();
@@ -41,7 +42,7 @@ function firstIssue(error: z.ZodError) {
 export async function listAdminCategories() {
   const { data, error } = await supabaseAdmin
     .from("categories")
-    .select("id, name, slug, icon_name, color_hex, description, sort_order, is_active, created_at, subcategories(id, category_id, name, slug, description, sort_order, is_active, created_at)")
+    .select("id, name, slug, icon_name, color_hex, description, sort_order, is_active, base_fee, created_at, subcategories(id, category_id, name, slug, description, sort_order, is_active, created_at)")
     .order("sort_order", { ascending: true })
     .order("name", { ascending: true })
     .order("sort_order", { foreignTable: "subcategories", ascending: true });
@@ -57,7 +58,7 @@ export async function createCategory(body: unknown) {
   const { data, error } = await supabaseAdmin
     .from("categories")
     .insert(parsed.data)
-    .select("id, name, slug, icon_name, color_hex, description, sort_order, is_active, created_at")
+    .select("id, name, slug, icon_name, color_hex, description, sort_order, is_active, base_fee, created_at")
     .single();
 
   if (error) throw appError(500, error.message, "ADMIN_CATEGORY_CREATE_FAILED");
@@ -73,7 +74,7 @@ export async function updateCategory(categoryId: string, body: unknown) {
     .from("categories")
     .update(parsed.data)
     .eq("id", categoryId)
-    .select("id, name, slug, icon_name, color_hex, description, sort_order, is_active, created_at")
+    .select("id, name, slug, icon_name, color_hex, description, sort_order, is_active, base_fee, created_at")
     .maybeSingle();
 
   if (error) throw appError(500, error.message, "ADMIN_CATEGORY_UPDATE_FAILED");
