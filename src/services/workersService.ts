@@ -431,8 +431,8 @@ export async function respondToTermination(userId: string, jobId: string, body: 
   }
 }
 
-export async function getHistory(userId: string) {
-  const { data, error } = await supabaseAdmin
+export async function getHistory(userId: string, limit?: number, offset?: number) {
+  let query = supabaseAdmin
     .from("jobs")
     .select(
       "id, title, description, status, budget_fixed, budget_min, budget_max, budget_type, address_label, location_lat, location_lng, updated_at, cancelled_by, cancelled_reason, cancelled_at, categories(name, icon_name, color_hex), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)",
@@ -440,6 +440,14 @@ export async function getHistory(userId: string) {
     .eq("worker_id", userId)
     .in("status", [JOB_STATUS.COMPLETED, JOB_STATUS.CANCELLED])
     .order("updated_at", { ascending: false });
+
+  if (limit !== undefined && offset !== undefined) {
+    query = query.range(offset, offset + limit - 1);
+  } else if (limit !== undefined) {
+    query = query.limit(limit);
+  }
+
+  const { data, error } = await query;
 
   if (error) throw appError(500, error.message, "HISTORY_FETCH_FAILED");
   return data ?? [];

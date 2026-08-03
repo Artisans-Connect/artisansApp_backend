@@ -13,8 +13,24 @@ router.get(
   catchAsync(async (req: Request, res: Response) => {
     const statusParam = req.query.status as string | undefined;
     const statusFilter = statusParam ? statusParam.split(",") : undefined;
-    const jobs = await jobsService.getMyJobs(req.user!.id, statusFilter);
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    const offset = req.query.offset ? Number(req.query.offset) : undefined;
+    const jobs = await jobsService.getMyJobs(
+      req.user!.id,
+      statusFilter,
+      Number.isFinite(limit) ? limit : undefined,
+      Number.isFinite(offset) ? offset : undefined
+    );
     res.status(200).json({ success: true, data: jobs });
+  }),
+);
+
+router.get(
+  "/mine/counts",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const counts = await jobsService.getMyJobsCounts(req.user!.id);
+    res.status(200).json({ success: true, data: counts });
   }),
 );
 

@@ -917,7 +917,7 @@ function enrichJobVerification(job: any) {
   return job;
 }
 
-export async function getMyJobs(userId: string, statusFilter?: string[]) {
+export async function getMyJobs(userId: string, statusFilter?: string[], limit?: number, offset?: number) {
   let query = supabaseAdmin
     .from("jobs")
     .select("id, title, status, worker_id, requested_worker_id, location_lat, location_lng, job_mode, scheduled_for, work_ended_at, budget_type, budget_fixed, budget_min, budget_max, address_label, created_at, updated_at, cancelled_by, cancelled_reason, cancelled_at, cancellation_stage, cancellation_fee, cancellation_fee_currency, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, workers(is_verified)), requested_worker:profiles!jobs_requested_worker_id_fkey(full_name, avatar_url, phone, workers(is_verified)), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
@@ -926,6 +926,12 @@ export async function getMyJobs(userId: string, statusFilter?: string[]) {
 
   if (statusFilter && statusFilter.length > 0) {
     query = query.in("status", statusFilter);
+  }
+
+  if (limit !== undefined && offset !== undefined) {
+    query = query.range(offset, offset + limit - 1);
+  } else if (limit !== undefined) {
+    query = query.limit(limit);
   }
 
   const { data, error } = await query;
@@ -947,6 +953,39 @@ export async function getMyJobs(userId: string, statusFilter?: string[]) {
     ...enrichJobVerification(job),
     client_review_rating: ratingByJobId.get(job.id) ?? null,
   }));
+}
+
+export async function getMyJobsCounts(userId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .select("status")
+    .eq("client_id", userId);
+
+  if (error) throw appError(500, error.message, "JOBS_COUNT_FAILED");
+
+  const counts: Record<string, number> = {
+    draft: 0,
+    searching: 0,
+    matching: 0,
+    matched: 0,
+    scheduled_confirmed: 0,
+    on_the_way: 0,
+    arrived: 0,
+    in_progress: 0,
+    termination_requested: 0,
+    pending_client_approval: 0,
+    completed: 0,
+    cancelled: 0,
+    expired: 0,
+  };
+
+  for (const job of data ?? []) {
+    if (job.status && job.status in counts) {
+      counts[job.status]++;
+    }
+  }
+
+  return counts;
 }
 
 export async function getMatchingProgress(userId: string, jobId: string) {

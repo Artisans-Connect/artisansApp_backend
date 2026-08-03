@@ -128,7 +128,13 @@ router.get(
   "/me/history",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
-    const jobs = await workersService.getHistory(req.user!.id);
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    const offset = req.query.offset ? Number(req.query.offset) : undefined;
+    const jobs = await workersService.getHistory(
+      req.user!.id,
+      Number.isFinite(limit) ? limit : undefined,
+      Number.isFinite(offset) ? offset : undefined
+    );
     res.status(200).json({ success: true, data: jobs });
   }),
 );
