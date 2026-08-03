@@ -23,6 +23,7 @@ const subcategorySchema = z.object({
   description: nullableText,
   sort_order: z.coerce.number().int().min(0).default(0),
   is_active: z.boolean().default(true),
+  base_fee: z.coerce.number().min(0).optional().nullable(),
 });
 
 const subcategoryPatchSchema = subcategorySchema.partial();
@@ -65,7 +66,7 @@ const LEGACY_FLAT_SLUGS = new Set([
 export async function listAdminCategories() {
   const { data, error } = await supabaseAdmin
     .from("categories")
-    .select("id, name, slug, icon_name, color_hex, description, sort_order, is_active, base_fee, created_at, subcategories(id, category_id, name, slug, description, sort_order, is_active, created_at)")
+    .select("id, name, slug, icon_name, color_hex, description, sort_order, is_active, base_fee, created_at, subcategories(id, category_id, name, slug, description, sort_order, is_active, base_fee, created_at)")
     .order("sort_order", { ascending: true })
     .order("name", { ascending: true })
     .order("sort_order", { foreignTable: "subcategories", ascending: true });
@@ -113,7 +114,7 @@ export async function createSubcategory(categoryId: string, body: unknown) {
   const { data, error } = await supabaseAdmin
     .from("subcategories")
     .insert({ ...parsed.data, category_id: categoryId })
-    .select("id, category_id, name, slug, description, sort_order, is_active, created_at")
+    .select("id, category_id, name, slug, description, sort_order, is_active, base_fee, created_at")
     .single();
 
   if (error) throw appError(500, error.message, "ADMIN_SUBCATEGORY_CREATE_FAILED");
@@ -129,7 +130,7 @@ export async function updateSubcategory(subcategoryId: string, body: unknown) {
     .from("subcategories")
     .update(parsed.data)
     .eq("id", subcategoryId)
-    .select("id, category_id, name, slug, description, sort_order, is_active, created_at")
+    .select("id, category_id, name, slug, description, sort_order, is_active, base_fee, created_at")
     .maybeSingle();
 
   if (error) throw appError(500, error.message, "ADMIN_SUBCATEGORY_UPDATE_FAILED");

@@ -8,7 +8,9 @@ import { appError } from "../utils/appError";
 const router = Router();
 
 const estimateSchema = z.object({
-  category_id: z.string().uuid(),
+  category_id: z.string().min(1),
+  subcategory_id: z.string().optional().nullable(),
+  subcategoryId: z.string().optional().nullable(),
   location_lat: z.number().min(-90).max(90),
   location_lng: z.number().min(-180).max(180),
   job_mode: z.enum(["asap", "scheduled", "flexible"]),
@@ -27,13 +29,15 @@ router.post(
       );
     }
 
-    const { category_id, location_lat, location_lng, job_mode } = parsed.data;
+    const { category_id, subcategory_id, subcategoryId, location_lat, location_lng, job_mode } = parsed.data;
+    const resolvedSubcatId = subcategory_id ?? subcategoryId;
 
     const estimate = await pricingService.estimateFee(
       category_id,
       location_lat,
       location_lng,
       job_mode,
+      resolvedSubcatId,
     );
 
     res.status(200).json({ success: true, data: estimate });

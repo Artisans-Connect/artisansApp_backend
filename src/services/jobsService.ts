@@ -284,7 +284,20 @@ async function getWorkerLocation(workerId: string) {
   return data;
 }
 
-async function getCategoryBaseFee(categoryId: string): Promise<number> {
+async function getCategoryBaseFee(categoryId: string, subcategoryId?: string | null): Promise<number> {
+  if (subcategoryId) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(subcategoryId);
+    const subcatQuery = supabaseAdmin.from("subcategories").select("base_fee");
+    const { data: subcat } = await (isUuid
+      ? subcatQuery.eq("id", subcategoryId)
+      : subcatQuery.eq("slug", subcategoryId)
+    ).maybeSingle();
+
+    if (subcat?.base_fee != null && Number(subcat.base_fee) > 0) {
+      return Number(subcat.base_fee);
+    }
+  }
+
   const { data } = await supabaseAdmin
     .from("categories")
     .select("base_fee")

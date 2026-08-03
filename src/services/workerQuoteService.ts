@@ -34,12 +34,26 @@ export type WorkerApplicationQuote = {
   quoted_at: string;
 };
 
-export async function getCategoryBaseFee(categoryId: string): Promise<number> {
-  const { data, error } = await supabaseAdmin
-    .from("categories")
-    .select("base_fee")
-    .eq("id", categoryId)
-    .maybeSingle();
+export async function getCategoryBaseFee(categoryId: string, subcategoryId?: string | null): Promise<number> {
+  if (subcategoryId) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(subcategoryId);
+    const subcatQuery = supabaseAdmin.from("subcategories").select("base_fee");
+    const { data: subcat } = await (isUuid
+      ? subcatQuery.eq("id", subcategoryId)
+      : subcatQuery.eq("slug", subcategoryId)
+    ).maybeSingle();
+
+    if (subcat?.base_fee != null && Number(subcat.base_fee) > 0) {
+      return Number(subcat.base_fee);
+    }
+  }
+
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(categoryId);
+  const catQuery = supabaseAdmin.from("categories").select("base_fee");
+  const { data, error } = await (isUuid
+    ? catQuery.eq("id", categoryId)
+    : catQuery.eq("slug", categoryId)
+  ).maybeSingle();
 
   if (error) throw appError(500, error.message, "CATEGORY_FEE_FETCH_FAILED");
   return data?.base_fee ? Number(data.base_fee) : DEFAULT_BASE_FEE;

@@ -23,17 +23,38 @@ export async function estimateFee(
   locationLat: number,
   locationLng: number,
   jobMode: string,
+  subcategoryId?: string | null,
 ): Promise<FeeEstimate> {
-  // 1. Look up category base fee
-  const { data: category } = await supabaseAdmin
-    .from("categories")
-    .select("base_fee")
-    .eq("id", categoryId)
-    .maybeSingle();
+  // 1. Look up base fee: check subcategory base_fee first, then parent category base_fee
+  let resolvedBaseFee: number | null = null;
 
-  const baseFee = category?.base_fee
-    ? Number(category.base_fee)
-    : DEFAULT_BASE_FEE;
+  if (subcategoryId) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(subcategoryId);
+    const subcatQuery = supabaseAdmin.from("subcategories").select("base_fee");
+    const { data: subcat } = await (isUuid
+      ? subcatQuery.eq("id", subcategoryId)
+      : subcatQuery.eq("slug", subcategoryId)
+    ).maybeSingle();
+
+    if (subcat?.base_fee != null && Number(subcat.base_fee) > 0) {
+      resolvedBaseFee = Number(subcat.base_fee);
+    }
+  }
+
+  if (resolvedBaseFee == null && categoryId) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(categoryId);
+    const catQuery = supabaseAdmin.from("categories").select("base_fee");
+    const { data: category } = await (isUuid
+      ? catQuery.eq("id", categoryId)
+      : catQuery.eq("slug", categoryId)
+    ).maybeSingle();
+
+    if (category?.base_fee != null && Number(category.base_fee) > 0) {
+      resolvedBaseFee = Number(category.base_fee);
+    }
+  }
+
+  const baseFee = resolvedBaseFee ?? DEFAULT_BASE_FEE;
 
   // 2. Worker-distance pricing is locked per worker application. Before a
   // worker applies, there is no reliable travel charge to show.
