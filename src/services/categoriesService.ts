@@ -1,6 +1,29 @@
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
 
+const LEGACY_FLAT_SLUGS = new Set([
+  "plumbing",
+  "electrical",
+  "carpentry",
+  "masonry",
+  "welding",
+  "construction",
+  "automotive",
+  "painting",
+  "tiling",
+  "roofing",
+  "hvac",
+  "appliance_repair",
+  "cleaning",
+  "landscaping",
+  "fashion",
+  "beauty",
+  "catering",
+  "upholstery",
+  "security",
+  "ict_support",
+]);
+
 export async function listCategories() {
   const { data, error } = await supabaseAdmin
     .from("categories")
@@ -11,5 +34,6 @@ export async function listCategories() {
     .order("sort_order", { foreignTable: "subcategories", ascending: true });
 
   if (error) throw appError(500, error.message, "CATEGORIES_FETCH_FAILED");
-  return data ?? [];
+  const categories = data ?? [];
+  return categories.filter((cat) => !LEGACY_FLAT_SLUGS.has(cat.slug));
 }
