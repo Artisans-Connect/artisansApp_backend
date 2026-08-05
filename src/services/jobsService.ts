@@ -173,10 +173,12 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
   const categoryId = await resolveCategoryId(input.category_id);
   const shouldDispatch = shouldDispatchJobOnCreate(input.job_mode, Boolean(input.requested_worker_id));
   
-  // ASAP, flexible, or direct request bookings start as DRAFT (unpaid).
-  // Scheduled jobs without a direct requested worker start as SEARCHING so artisans can apply/bid first.
+  // Fallback to standard matching if Paystack payment is not active/configured yet.
+  const isPaymentActive = Boolean(process.env.PAYSTACK_SECRET_KEY);
   const isScheduledNoDirect = input.job_mode === JOB_MODE.SCHEDULED && !input.requested_worker_id;
-  const status = isScheduledNoDirect ? JOB_STATUS.SEARCHING : JOB_STATUS.DRAFT;
+  const status = isPaymentActive
+    ? (isScheduledNoDirect ? JOB_STATUS.SEARCHING : JOB_STATUS.DRAFT)
+    : (input.requested_worker_id && shouldDispatch ? JOB_STATUS.MATCHING : statusForNewJob(input.job_mode));
 
   if (input.requested_worker_id && shouldDispatch && input.job_mode !== JOB_MODE.SCHEDULED) {
     // Scheduled requests skip the busy check: being busy now says nothing
