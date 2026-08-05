@@ -2,6 +2,9 @@ name: Maintain OpenWiki documentation
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "17 3 * * 0"
 
