@@ -12,6 +12,7 @@ import adminRouter from "./admin";
 import searchRouter from "./search";
 import tradesRouter from "./trades";
 import releasesRouter from "./releases";
+import paymentsRouter from "./payments";
 
 const router = Router();
 
@@ -29,5 +30,6 @@ router.use("/admin", adminRouter);
 router.use("/search", searchRouter);
 router.use("/trades", tradesRouter);
 router.use("/releases", releasesRouter);
+router.use("/payments", paymentsRouter);
 
 export default router;
