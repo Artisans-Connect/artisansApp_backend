@@ -246,4 +246,81 @@ router.get("/payout-details", authMiddleware, async (req: Request, res: Response
   }
 });
 
+/**
+ * POST /api/payments/extra-charge/propose
+ * Body: { jobId: string, amount: number, description: string, proposedBy: 'worker' | 'client' }
+ */
+router.post("/extra-charge/propose", authMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { jobId, amount, description, proposedBy } = req.body;
+    if (!jobId || !amount || !proposedBy) {
+      next(appError(400, "jobId, amount, and proposedBy are required", "VALIDATION_ERROR"));
+      return;
+    }
+
+    const result = await paymentsService.proposeExtraCharge(req.user!.id, jobId, amount, description, proposedBy);
+    res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/payments/extra-charge/accept
+ * Body: { extraChargeId: string }
+ */
+router.post("/extra-charge/accept", authMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { extraChargeId } = req.body;
+    if (!extraChargeId) {
+      next(appError(400, "extraChargeId is required", "VALIDATION_ERROR"));
+      return;
+    }
+
+    const result = await paymentsService.acceptExtraCharge(req.user!.id, extraChargeId);
+    res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/payments/extra-charge/initialize
+ * Body: { extraChargeId: string }
+ */
+router.post("/extra-charge/initialize", authMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { extraChargeId } = req.body;
+    if (!extraChargeId) {
+      next(appError(400, "extraChargeId is required", "VALIDATION_ERROR"));
+      return;
+    }
+
+    const result = await paymentsService.initializeExtraChargePayment(req.user!.id, extraChargeId);
+    res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/payments/extra-charge/counter
+ * Body: { extraChargeId: string, amount: number }
+ */
+router.post("/extra-charge/counter", authMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { extraChargeId, amount } = req.body;
+    if (!extraChargeId || !amount || Number(amount) <= 0) {
+      next(appError(400, "extraChargeId and valid amount are required", "VALIDATION_ERROR"));
+      return;
+    }
+
+    const result = await paymentsService.counterExtraCharge(req.user!.id, extraChargeId, Number(amount));
+    res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
+

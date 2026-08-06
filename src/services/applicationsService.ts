@@ -99,6 +99,8 @@ export async function applyToJob(workerId: string, jobId: string, body?: ApplyTo
         total_quote: effectiveTotalQuote,
         quote_currency: quote.quote_currency,
         quoted_at: quote.quoted_at,
+        last_proposed_by: "worker",
+        counter_rate: null,
       },
       { onConflict: "job_id,worker_id" },
     )
@@ -223,7 +225,7 @@ export async function acceptApplication(clientId: string, jobId: string, applica
   if (!isScheduled) {
     await ensureWorkerHasNoActiveJob(application.worker_id, jobId);
   }
-  const nextStatus = isScheduled ? JOB_STATUS.SCHEDULED_CONFIRMED : JOB_STATUS.MATCHED;
+  const nextStatus = JOB_STATUS.AWAITING_PAYMENT;
 
   const now = new Date().toISOString();
   const { data: updatedJob, error: updateError } = await supabaseAdmin
@@ -299,3 +301,118 @@ export async function withdrawApplication(workerId: string, jobId: string) {
 
   return { success: true };
 }
+
+export async function counterApplication(clientId: string, applicationId: string, counterRate: number) {
+  const { data: application, error: applicationError } = await supabaseAdmin
+    .from("job_applications")
+    .select("*, jobs(client_id)")
+    .eq("id", applicationId)
+    .maybeSingle();
+
+  if (applicationError) throw appError(500, applicationError.message, "APPLICATION_FETCH_FAILED");
+  if (!application) throw appError(404, "Application not found", "APPLICATION_NOT_FOUND");
+  if (application.status !== "pending") {
+    throw appError(400, "Only pending applications can be countered", "INVALID_APPLICATION_STATE");
+  }
+
+  const job = application.jobs as any;
+  if (job.client_id !== clientId) {
+    throw appError(403, "Not authorized to counter this application", "FORBIDDEN");
+  }
+
+  const { data: updatedApp, error: updateError } = await supabaseAdmin
+    .from("job_applications")
+    .update({
+      last_proposed_by: "client",
+      counter_rate: counterRate,
+    })
+    .eq("id", applicationId)
+    .select()
+    .single();
+
+  if (updateError) throw appError(500, updateError.message, "APPLICATION_COUNTER_FAILED");
+
+  await notifyService.notifyWorkerCounterOffer(application.worker_id, application.job_id, counterRate);
+
+  return updatedApp;
+}
+
+export async function acceptCounterOffer(workerId: string, applicationId: string) {
+  const { data: application, error: applicationError } = await supabaseAdmin
+    .from("job_applications")
+    .select("*, jobs(client_id, status, job_mode)")
+    .eq("id", applicationId)
+    .eq("worker_id", workerId)
+    .maybeSingle();
+
+  if (applicationError) throw appError(500, applicationError.message, "APPLICATION_FETCH_FAILED");
+  if (!application) throw appError(404, "Application not found", "APPLICATION_NOT_FOUND");
+  if (application.status !== "pending" || application.last_proposed_by !== "client" || !application.counter_rate) {
+    throw appError(400, "No pending counter offer from client exists for this application", "INVALID_APPLICATION_STATE");
+  }
+
+  const job = application.jobs as any;
+  if (![JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status)) {
+    throw appError(409, "Job is no longer open for applications", "INVALID_JOB_STATE");
+  }
+
+  const finalQuote = Number(application.counter_rate);
+  const now = new Date().toISOString();
+
+  const { error: acceptStatusError } = await supabaseAdmin
+    .from("job_applications")
+    .update({ 
+      status: "accepted", 
+      total_quote: finalQuote 
+    })
+    .eq("id", applicationId);
+
+  if (acceptStatusError) throw appError(500, acceptStatusError.message, "APPLICATION_STATUS_UPDATE_FAILED");
+
+  await supabaseAdmin
+    .from("job_applications")
+    .update({ status: "declined" })
+    .eq("job_id", application.job_id)
+    .neq("id", applicationId)
+    .eq("status", "pending");
+
+  const { data: updatedJob, error: updateError } = await supabaseAdmin
+    .from("jobs")
+    .update({ 
+      status: JOB_STATUS.AWAITING_PAYMENT, 
+      worker_id: workerId, 
+      updated_at: now 
+    })
+    .eq("id", application.job_id)
+    .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
+    .single();
+
+  if (updateError) throw appError(500, updateError.message, "JOB_ASSIGN_FAILED");
+
+  matchingService.clearDispatchState(application.job_id);
+  await matchingService.markDispatchAccepted(application.job_id, workerId);
+  await matchingService.markDispatchesExpired(application.job_id, workerId);
+
+  const { data: workerProfile } = await supabaseAdmin
+    .from("profiles")
+    .select("full_name")
+    .eq("id", workerId)
+    .maybeSingle();
+
+  await notifyService.notifyClientCounterOffer(
+    job.client_id,
+    application.job_id,
+    workerProfile?.full_name ?? "Artisan",
+    finalQuote
+  );
+
+  if (updatedJob && updatedJob.job_mode === JOB_MODE.ASAP) {
+    await supabaseAdmin
+      .from("workers")
+      .update({ is_available: false, updated_at: now })
+      .eq("id", workerId);
+  }
+
+  return updatedJob;
+}
+

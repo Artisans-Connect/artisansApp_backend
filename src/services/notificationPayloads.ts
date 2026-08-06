@@ -29,6 +29,11 @@ const PRIORITY_BY_TYPE: Record<string, NotificationPriority> = {
   scheduled_activation_blocked: "action_required",
   termination_requested: "action_required",
   worker_cancelled_job: "action_required",
+  application_countered: "action_required",
+  application_countered_client: "action_required",
+  extra_charge_proposed: "action_required",
+  extra_charge_countered: "action_required",
+  extra_charge_accepted: "action_required",
   chat_message: "info",
   worker_on_the_way: "status",
   worker_arrived: "status",
@@ -67,6 +72,11 @@ const ROUTE_BY_TYPE: Record<string, NotificationRoute> = {
   work_confirmed_done: "worker_active_booking",
   termination_requested: "worker_active_booking",
   termination_resolved: "client_live_tracking",
+  application_countered: "worker_job_request",
+  application_countered_client: "client_job_applicants",
+  extra_charge_proposed: "client_live_tracking",
+  extra_charge_countered: "worker_active_booking",
+  extra_charge_accepted: "client_live_tracking",
 };
 
 const ACTION_LABEL_BY_TYPE: Record<string, string> = {
@@ -92,6 +102,11 @@ const ACTION_LABEL_BY_TYPE: Record<string, string> = {
   work_confirmed_done: "View job",
   termination_requested: "Respond",
   termination_resolved: "View job",
+  application_countered: "Review counter-offer",
+  application_countered_client: "Review counter-offer",
+  extra_charge_proposed: "Review request",
+  extra_charge_countered: "Review counter-offer",
+  extra_charge_accepted: "Pay extra charge",
 };
 
 export function priorityForNotificationType(type: string): NotificationPriority {

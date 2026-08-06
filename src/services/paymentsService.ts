@@ -107,9 +107,12 @@ export async function initializePayment(userId: string, jobId: string, applicati
 
     if (payError) throw appError(500, payError.message, "PAYMENT_RECORD_FAILED");
 
+    const portalBaseUrl = process.env.VERIFICATION_PORTAL_URL || "http://localhost:5173";
+    const checkout_url = `${portalBaseUrl}/payment-gateway?reference=${reference}`;
+
     return {
       reference,
-      checkout_url: paystackData.authorization_url,
+      checkout_url,
       amount,
     };
   } catch (err: any) {
@@ -152,7 +155,45 @@ export async function verifyPayment(reference: string) {
       const jobId = metadata.job_id || payment.job_id;
       const clientId = metadata.client_id || payment.client_id;
       const applicationId = metadata.application_id;
+      const extraChargeId = metadata.extra_charge_id;
       const depositAmount = Number(metadata.deposit_amount || payment.amount);
+
+      if (extraChargeId) {
+        const { error: payUpdateErr } = await supabaseAdmin
+          .from("payments")
+          .update({ status: "completed", paystack_payload: paystackData })
+          .eq("reference", reference);
+
+        if (payUpdateErr) throw appError(500, payUpdateErr.message, "PAYMENT_UPDATE_FAILED");
+
+        await supabaseAdmin
+          .from("job_extra_charges")
+          .update({ status: "paid" })
+          .eq("id", extraChargeId);
+
+        const { data: escrow } = await supabaseAdmin
+          .from("job_escrow_balances")
+          .select("held_amount")
+          .eq("job_id", jobId)
+          .maybeSingle();
+
+        const currentHeld = escrow ? Number(escrow.held_amount) : 0;
+        await supabaseAdmin.from("job_escrow_balances").upsert({
+          job_id: jobId,
+          held_amount: currentHeld + depositAmount,
+          status: "held",
+          updated_at: new Date().toISOString(),
+        });
+
+        await supabaseAdmin.from("escrow_ledger").insert({
+          job_id: jobId,
+          amount: depositAmount,
+          type: "extra_charge_deposit",
+          reference: reference,
+        });
+
+        return { success: true, message: "Extra charge payment processed successfully" };
+      }
 
       const { error: payUpdateErr } = await supabaseAdmin
         .from("payments")
@@ -459,5 +500,206 @@ export async function refundEscrowToClient(jobId: string, refundAmount: number) 
       .from("job_escrow_balances")
       .update({ status: "disputed", updated_at: new Date().toISOString() })
       .eq("job_id", jobId);
+  }
+}
+
+export async function proposeExtraCharge(userId: string, jobId: string, amount: number, description: string, proposedBy: "worker" | "client") {
+  const { data: job, error: jobErr } = await supabaseAdmin
+    .from("jobs")
+    .select("client_id, worker_id")
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (jobErr) throw appError(500, jobErr.message, "JOB_FETCH_FAILED");
+  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+  if (job.client_id !== userId && job.worker_id !== userId) {
+    throw appError(403, "Not authorized", "FORBIDDEN");
+  }
+
+  await supabaseAdmin
+    .from("job_extra_charges")
+    .update({ status: "rejected" })
+    .eq("job_id", jobId)
+    .in("status", ["pending", "countered"]);
+
+  const { data, error } = await supabaseAdmin
+    .from("job_extra_charges")
+    .insert({
+      job_id: jobId,
+      requested_amount: amount,
+      proposed_by: proposedBy,
+      status: proposedBy === "worker" ? "pending" : "countered",
+      description,
+    })
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "EXTRA_CHARGE_PROPOSE_FAILED");
+
+  if (proposedBy === "worker") {
+    await notifyService.notifyClientExtraChargeProposed(job.client_id, jobId, amount);
+  } else {
+    await notifyService.notifyWorkerExtraChargeCountered(job.worker_id, jobId, amount);
+  }
+
+  return data;
+}
+
+export async function acceptExtraCharge(userId: string, extraChargeId: string) {
+  const { data: charge, error: chargeErr } = await supabaseAdmin
+    .from("job_extra_charges")
+    .select("*, jobs(client_id, worker_id)")
+    .eq("id", extraChargeId)
+    .maybeSingle();
+
+  if (chargeErr) throw appError(500, chargeErr.message, "EXTRA_CHARGE_FETCH_FAILED");
+  if (!charge) throw appError(404, "Extra charge request not found", "EXTRA_CHARGE_NOT_FOUND");
+
+  const job = charge.jobs as any;
+  if (job.client_id !== userId && job.worker_id !== userId) {
+    throw appError(403, "Not authorized", "FORBIDDEN");
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("job_extra_charges")
+    .update({ status: "accepted" })
+    .eq("id", extraChargeId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "EXTRA_CHARGE_ACCEPT_FAILED");
+
+  if (charge.proposed_by === "client" && userId === job.worker_id) {
+    await notifyService.notifyClientExtraChargeAccepted(job.client_id, charge.job_id, Number(charge.requested_amount));
+  } else if (charge.proposed_by === "worker" && userId === job.client_id) {
+    // Proactive notification if client accepts directly
+    await notifyService.notifyClientExtraChargeAccepted(job.client_id, charge.job_id, Number(charge.requested_amount));
+  }
+
+  return data;
+}
+
+export async function counterExtraCharge(userId: string, extraChargeId: string, amount: number) {
+  const { data: charge, error: chargeErr } = await supabaseAdmin
+    .from("job_extra_charges")
+    .select("*, jobs(client_id, worker_id)")
+    .eq("id", extraChargeId)
+    .maybeSingle();
+
+  if (chargeErr) throw appError(500, chargeErr.message, "EXTRA_CHARGE_FETCH_FAILED");
+  if (!charge) throw appError(404, "Extra charge not found", "EXTRA_CHARGE_NOT_FOUND");
+
+  const job = charge.jobs as any;
+  if (job.client_id !== userId && job.worker_id !== userId) {
+    throw appError(403, "Not authorized", "FORBIDDEN");
+  }
+
+  const proposedBy = userId === job.client_id ? "client" : "worker";
+  const newStatus = proposedBy === "worker" ? "pending" : "countered";
+
+  const { data, error } = await supabaseAdmin
+    .from("job_extra_charges")
+    .update({
+      requested_amount: amount,
+      proposed_by: proposedBy,
+      status: newStatus,
+    })
+    .eq("id", extraChargeId)
+    .select()
+    .single();
+
+  if (error) throw appError(500, error.message, "EXTRA_CHARGE_COUNTER_FAILED");
+
+  if (proposedBy === "client") {
+    await notifyService.notifyWorkerExtraChargeCountered(job.worker_id, charge.job_id, amount);
+  } else {
+    await notifyService.notifyClientExtraChargeProposed(job.client_id, charge.job_id, amount);
+  }
+
+  return data;
+}
+
+
+export async function initializeExtraChargePayment(userId: string, extraChargeId: string) {
+  const { data: charge, error: chargeErr } = await supabaseAdmin
+    .from("job_extra_charges")
+    .select("*, jobs(client_id, title)")
+    .eq("id", extraChargeId)
+    .maybeSingle();
+
+  if (chargeErr) throw appError(500, chargeErr.message, "EXTRA_CHARGE_FETCH_FAILED");
+  if (!charge) throw appError(404, "Extra charge not found", "EXTRA_CHARGE_NOT_FOUND");
+
+  const job = charge.jobs as any;
+  if (job.client_id !== userId) throw appError(403, "Unauthorized", "FORBIDDEN");
+  if (charge.status !== "accepted") {
+    throw appError(400, "Extra charge must be accepted before payment", "INVALID_CHARGE_STATE");
+  }
+
+  const amount = Number(charge.requested_amount);
+  const amountInPesewas = Math.round(amount * 100);
+
+  const { data: profile } = await supabaseAdmin
+    .from("profiles")
+    .select("email")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const email = profile?.email || "customer@craftmatch.com";
+  const reference = `cm_ext_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+  try {
+    const key = getPaystackSecretKey();
+    const response = await axios.post(
+      `${PAYSTACK_API}/transaction/initialize`,
+      {
+        email,
+        amount: amountInPesewas,
+        reference,
+        callback_url: `${process.env.EXPRESS_API_BASE_URL || "https://artisansapp-backend.onrender.com/api"}/payments/callback`,
+        metadata: {
+          job_id: charge.job_id,
+          client_id: userId,
+          extra_charge_id: extraChargeId,
+          deposit_amount: amount,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const paystackData = response.data?.data;
+    if (!paystackData || !paystackData.authorization_url) {
+      throw appError(500, "Failed to fetch checkout url from Paystack", "PAYMENT_INIT_FAILED");
+    }
+
+    await supabaseAdmin.from("payments").insert({
+      client_id: userId,
+      job_id: charge.job_id,
+      amount,
+      reference,
+      status: "pending",
+      paystack_payload: paystackData,
+    });
+
+    const portalBaseUrl = process.env.VERIFICATION_PORTAL_URL || "http://localhost:5173";
+    const checkout_url = `${portalBaseUrl}/payment-gateway?reference=${reference}`;
+
+    return {
+      reference,
+      checkout_url,
+      amount,
+    };
+  } catch (err: any) {
+    logger("Paystack Extra Charge Initialize Error:", err.response?.data || err.message);
+    throw appError(
+      err.response?.status || 500,
+      err.response?.data?.message || "Failed to initialize extra charge payment",
+      "PAYMENT_INIT_ERROR"
+    );
   }
 }

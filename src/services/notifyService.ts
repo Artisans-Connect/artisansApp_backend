@@ -395,3 +395,86 @@ export async function notifyTerminationResolved(
     }),
   });
 }
+
+export async function notifyWorkerCounterOffer(
+  workerId: string,
+  jobId: string,
+  counterRate: number,
+): Promise<void> {
+  await sendToUser(workerId, {
+    title: "Counter-offer received",
+    body: `Client countered your bid with GHS ${counterRate.toFixed(2)}`,
+    data: buildNotificationData("application_countered", {
+      jobId,
+      roleTarget: "worker",
+      counterRate: String(counterRate),
+    }),
+  });
+}
+
+export async function notifyClientCounterOffer(
+  clientId: string,
+  jobId: string,
+  workerName: string,
+  counterRate: number,
+): Promise<void> {
+  await sendToUser(clientId, {
+    title: "Counter-offer received",
+    body: `${workerName} countered your offer with GHS ${counterRate.toFixed(2)}`,
+    data: buildNotificationData("application_countered_client", {
+      jobId,
+      roleTarget: "client",
+      counterRate: String(counterRate),
+      actorName: workerName,
+    }),
+  });
+}
+
+export async function notifyClientExtraChargeProposed(
+  clientId: string,
+  jobId: string,
+  amount: number,
+): Promise<void> {
+  await sendToUser(clientId, {
+    title: "Extra charge request",
+    body: `Artisan requested an extra charge of GHS ${amount.toFixed(2)}`,
+    data: buildNotificationData("extra_charge_proposed", {
+      jobId,
+      roleTarget: "client",
+      amount: String(amount),
+    }),
+  });
+}
+
+export async function notifyWorkerExtraChargeCountered(
+  workerId: string,
+  jobId: string,
+  amount: number,
+): Promise<void> {
+  await sendToUser(workerId, {
+    title: "Extra charge countered",
+    body: `Client countered the extra charge with GHS ${amount.toFixed(2)}`,
+    data: buildNotificationData("extra_charge_countered", {
+      jobId,
+      roleTarget: "worker",
+      amount: String(amount),
+    }),
+  });
+}
+
+export async function notifyClientExtraChargeAccepted(
+  clientId: string,
+  jobId: string,
+  amount: number,
+): Promise<void> {
+  await sendToUser(clientId, {
+    title: "Extra charge accepted",
+    body: `Artisan accepted the GHS ${amount.toFixed(2)} extra charge. You can now complete the payment.`,
+    data: buildNotificationData("extra_charge_accepted", {
+      jobId,
+      roleTarget: "client",
+      amount: String(amount),
+    }),
+  });
+}
+
