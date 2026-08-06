@@ -944,7 +944,7 @@ export async function approveCompletion(userId: string, jobId: string) {
   if (error) throw appError(500, error.message, "JOB_APPROVE_COMPLETION_FAILED");
   matchingService.clearDispatchState(jobId);
   await releaseWorkerAfterTerminalJob(job.worker_id);
-  await notifyService.notifyJobCompleted(job.client_id, jobId);
+  await notifyService.notifyJobCompleted(job.client_id, jobId, job.worker_id);
   return data;
 }
 
