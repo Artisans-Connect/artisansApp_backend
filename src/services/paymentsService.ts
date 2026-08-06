@@ -58,18 +58,70 @@ export async function initializePayment(userId: string, jobId: string, applicati
       if (appErr) throw appError(500, appErr.message, "APPLICATION_FETCH_FAILED");
       if (!app) throw appError(404, "Application not found", "APPLICATION_NOT_FOUND");
       amount = Number(app.total_quote);
+      
+      // Auto-create an accepted quote negotiation to satisfy NOT NULL constraints!
+      const { data: newNeg, error: newNegErr } = await supabaseAdmin
+        .from("negotiations")
+        .insert({
+          job_id: jobId,
+          application_id: applicationId,
+          type: "quote",
+          status: "accepted",
+          initial_amount: amount,
+          agreed_amount: amount,
+          initiated_by: userId,
+          accepted_by: userId
+        })
+        .select("id")
+        .single();
+        
+      if (newNegErr) throw appError(500, newNegErr.message, "NEGOTIATION_CREATE_FAILED");
+      negotiationId = newNeg.id;
     }
   } else {
-    const { data: cat, error: catError } = await supabaseAdmin
-      .from("categories")
-      .select("base_fee")
-      .eq("id", job.category_id)
+    // Check if there is an accepted completion_adjustment or extra_charge negotiation
+    const { data: neg } = await supabaseAdmin
+      .from("negotiations")
+      .select("id, agreed_amount")
+      .eq("job_id", jobId)
+      .in("type", ["completion_adjustment", "extra_charge"])
+      .eq("status", "accepted")
       .maybeSingle();
+
+    if (neg) {
+      amount = Number(neg.agreed_amount);
+      negotiationId = neg.id;
+    } else {
+      // Use category base fee or estimate
+      const { data: cat, error: catError } = await supabaseAdmin
+        .from("categories")
+        .select("base_fee")
+        .eq("id", job.category_id)
+        .maybeSingle();
+        
+      if (catError) throw appError(500, catError.message, "CATEGORY_FETCH_FAILED");
       
-    if (catError) throw appError(500, catError.message, "CATEGORY_FETCH_FAILED");
-    
-    const baseFee = cat ? Number(cat.base_fee) : 0;
-    amount = baseFee > 0 ? baseFee : 40.00;
+      const baseFee = cat ? Number(cat.base_fee) : 0;
+      amount = baseFee > 0 ? baseFee : 40.00;
+
+      // Auto-create a completion_adjustment negotiation to satisfy NOT NULL constraints!
+      const { data: newNeg, error: newNegErr } = await supabaseAdmin
+        .from("negotiations")
+        .insert({
+          job_id: jobId,
+          type: "completion_adjustment",
+          status: "accepted",
+          initial_amount: amount,
+          agreed_amount: amount,
+          initiated_by: userId,
+          accepted_by: userId
+        })
+        .select("id")
+        .single();
+        
+      if (newNegErr) throw appError(500, newNegErr.message, "NEGOTIATION_CREATE_FAILED");
+      negotiationId = newNeg.id;
+    }
   }
 
   const amountInPesewas = Math.round(amount * 100);
@@ -83,26 +135,23 @@ export async function initializePayment(userId: string, jobId: string, applicati
   const email = profile?.email || "customer@craftmatch.com";
   const reference = `cm_pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-  // Create checkout session in the database if there's a negotiation
-  let sessionId = reference;
-  if (negotiationId) {
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins expiry
-    const { data: session, error: sessError } = await supabaseAdmin
-      .from("checkout_sessions")
-      .insert({
-        job_id: jobId,
-        negotiation_id: negotiationId,
-        amount,
-        reference,
-        status: "pending",
-        expires_at: expiresAt
-      })
-      .select("id")
-      .single();
+  // Create checkout session in the database - ALWAYS!
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins expiry
+  const { data: session, error: sessError } = await supabaseAdmin
+    .from("checkout_sessions")
+    .insert({
+      job_id: jobId,
+      negotiation_id: negotiationId,
+      amount,
+      reference,
+      status: "pending",
+      expires_at: expiresAt
+    })
+    .select("id")
+    .single();
       
-    if (sessError) throw appError(500, sessError.message, "CHECKOUT_SESSION_CREATE_FAILED");
-    sessionId = session.id;
-  }
+  if (sessError) throw appError(500, sessError.message, "CHECKOUT_SESSION_CREATE_FAILED");
+  const sessionId = session.id;
 
   let paystackData: any = null;
   const key = process.env.PAYSTACK_SECRET_KEY;
