@@ -178,23 +178,12 @@ export async function notifyJobExpired(clientId: string, jobId: string): Promise
   });
 }
 
-export async function notifyJobCompleted(
-  clientId: string,
-  jobId: string,
-  workerId?: string | null,
-): Promise<void> {
+export async function notifyJobCompleted(clientId: string, jobId: string): Promise<void> {
   await sendToUser(clientId, {
     title: "Job completed",
     body: "Please rate your artisan",
     data: buildNotificationData("job_completed", { jobId, roleTarget: "client" }),
   });
-  if (workerId) {
-    await sendToUser(workerId, {
-      title: "Job completed",
-      body: "The client has approved your job completion.",
-      data: buildNotificationData("job_completed", { jobId, roleTarget: "worker" }),
-    });
-  }
 }
 
 export async function notifyCompletionSubmitted(clientId: string, jobId: string): Promise<void> {
