@@ -330,7 +330,7 @@ router.post("/extra-charge/counter", authMiddleware, async (req: Request, res: R
  */
 router.get("/checkout-session/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const session = await paymentsService.getCheckoutSession(req.params.id);
+    const session = await paymentsService.getCheckoutSession(req.params.id as string);
     res.status(200).json({ success: true, data: session });
   } catch (err) {
     next(err);
@@ -366,7 +366,7 @@ router.post("/sandbox/callback", async (req: Request, res: Response, next: NextF
  */
 router.get("/settlement/:jobId", authMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const calculation = await settlementService.calculateSettlement(req.params.jobId);
+    const calculation = await settlementService.calculateSettlement(req.params.jobId as string);
     res.status(200).json({ success: true, data: calculation });
   } catch (err) {
     next(err);
@@ -378,26 +378,26 @@ router.get("/settlement/:jobId", authMiddleware, async (req: Request, res: Respo
  */
 router.post("/settlement/:jobId/checkout", authMiddleware, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const calculation = await settlementService.calculateSettlement(req.params.jobId);
+    const calculation = await settlementService.calculateSettlement(req.params.jobId as string);
     if (calculation.outstanding_balance <= 0) {
       // Direct release without checkout since outstanding balance is 0
-      const result = await settlementService.processPayoutAndRelease(req.params.jobId);
+      const result = await settlementService.processPayoutAndRelease(req.params.jobId as string);
       res.status(200).json({ success: true, message: "Escrow released successfully", data: result });
       return;
     }
 
     // Initialize payment for outstanding balance:
-    // 1. Create a final_settlement negotiation round
+    // 1. Create a completion_adjustment negotiation round
     const negotiation = await negotiationEngine.createNegotiation({
-      jobId: req.params.jobId,
-      type: "final_settlement",
+      jobId: req.params.jobId as string,
+      type: "completion_adjustment",
       initiatorId: req.user!.id,
       initialAmount: calculation.gross_amount,
       description: "Final completion settlement"
     });
 
     // 2. Initialize checkout session
-    const paymentInit = await paymentsService.initializePayment(req.user!.id, req.params.jobId);
+    const paymentInit = await paymentsService.initializePayment(req.user!.id, req.params.jobId as string);
     res.status(200).json({ success: true, data: paymentInit });
   } catch (err) {
     next(err);

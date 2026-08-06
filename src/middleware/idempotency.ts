@@ -28,14 +28,18 @@ export async function idempotencyMiddleware(req: Request, res: Response, next: N
     const originalJson = res.json;
     res.json = function (body: any) {
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        supabaseAdmin
-          .from("payment_idempotency_keys")
-          .insert({
-            key_hash: hash,
-            response_payload: body
-          })
-          .then(() => {})
-          .catch((err) => console.error("Idempotency save warning:", err.message));
+        (async () => {
+          try {
+            await supabaseAdmin
+              .from("payment_idempotency_keys")
+              .insert({
+                key_hash: hash,
+                response_payload: body
+              });
+          } catch (err: any) {
+            console.error("Idempotency save warning:", err.message);
+          }
+        })();
       }
       return originalJson.call(this, body);
     };

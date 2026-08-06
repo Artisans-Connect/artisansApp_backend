@@ -294,7 +294,7 @@ export async function verifyPayment(reference: string) {
           .select("type")
           .maybeSingle();
 
-        if (neg?.type === "final_settlement") {
+        if (neg?.type === "completion_adjustment") {
           await settlementService.processPayoutAndRelease(session.job_id, reference);
         }
       }
