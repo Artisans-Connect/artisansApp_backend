@@ -21,7 +21,7 @@ function getPaystackSecretKey(): string {
 export async function initializePayment(userId: string, jobId: string, applicationId?: string) {
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
-    .select("id, client_id, status, budget_fixed, job_mode, subcategory_id")
+    .select("id, client_id, status, budget_fixed, job_mode, category_id")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -44,15 +44,15 @@ export async function initializePayment(userId: string, jobId: string, applicati
     // Deposit is 20% of the accepted quote amount
     amount = Number(app.total_quote) * 0.20; 
   } else {
-    const { data: subcat, error: subcatError } = await supabaseAdmin
-      .from("subcategories")
+    const { data: cat, error: catError } = await supabaseAdmin
+      .from("categories")
       .select("base_fee")
-      .eq("id", job.subcategory_id)
+      .eq("id", job.category_id)
       .maybeSingle();
       
-    if (subcatError) throw appError(500, subcatError.message, "SUBCATEGORY_FETCH_FAILED");
+    if (catError) throw appError(500, catError.message, "CATEGORY_FETCH_FAILED");
     
-    const baseFee = subcat ? Number(subcat.base_fee) : 0;
+    const baseFee = cat ? Number(cat.base_fee) : 0;
     amount = baseFee > 0 ? baseFee : 20.00;
   }
 
