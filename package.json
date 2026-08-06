@@ -7,8 +7,6 @@
     "start": "node dist/server.js",
     "dev": "cross-env NODE_ENV=development tsx watch src/server.ts",
     "test": "tsx --test tests/*.test.ts",
-    "docs:wiki:init": "node scripts/openwiki-runner.cjs --init",
-    "docs:wiki:update": "node scripts/openwiki-runner.cjs --update --print",
     "bench": "tsx scripts/experiments/runAll.ts",
     "seed:categories": "tsx scripts/seed-categories.ts",
     "seed:workers": "tsx scripts/seed-workers.ts",
@@ -32,7 +30,6 @@
     "@types/swagger-ui-express": "^4.1.8",
     "@types/yamljs": "^0.2.34",
     "cross-env": "^10.1.0",
-    "openwiki": "^0.2.4",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   },
