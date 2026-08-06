@@ -99,7 +99,7 @@ export async function initializePayment(userId: string, jobId: string, applicati
     }
   }
 
-  const portalBaseUrl = process.env.VERIFICATION_PORTAL_URL || "http://localhost:5173";
+  const portalBaseUrl = (process.env.VERIFICATION_PORTAL_URL || "https://craft-match-verification-portal.vercel.app").replace(/\/$/, "");
   const checkout_url = `${portalBaseUrl}/payment-gateway?reference=${reference}`;
 
   if (!paystackData) {
@@ -698,7 +698,7 @@ export async function initializeExtraChargePayment(userId: string, extraChargeId
     }
   }
 
-  const portalBaseUrl = process.env.VERIFICATION_PORTAL_URL || "http://localhost:5173";
+  const portalBaseUrl = (process.env.VERIFICATION_PORTAL_URL || "https://craft-match-verification-portal.vercel.app").replace(/\/$/, "");
   const checkout_url = `${portalBaseUrl}/payment-gateway?reference=${reference}`;
 
   if (!paystackData) {
