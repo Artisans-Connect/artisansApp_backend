@@ -71,7 +71,7 @@ export async function sendToToken(token: string, payload: PushPayload): Promise<
   }
 }
 
-async function sendToUser(userId: string, payload: PushPayload): Promise<void> {
+export async function sendToUser(userId: string, payload: PushPayload): Promise<void> {
   await storeNotification(userId, payload);
 
   const tokens = await getUserFcmTokens(userId);

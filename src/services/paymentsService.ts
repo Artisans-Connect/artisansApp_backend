@@ -4,6 +4,8 @@ import { appError } from "../utils/appError";
 import { JOB_STATUS } from "../constants/enums";
 import { logger } from "../utils/logger";
 import * as notifyService from "./notifyService";
+import * as settlementService from "./settlementService";
+import { logEvent } from "../utils/auditLogger";
 
 const PAYSTACK_API = "https://api.paystack.co";
 
@@ -30,19 +32,33 @@ export async function initializePayment(userId: string, jobId: string, applicati
   if (job.client_id !== userId) throw appError(403, "Unauthorized", "FORBIDDEN");
 
   let amount = 0;
+  let negotiationId: string | null = null;
   
   if (applicationId) {
-    const { data: app, error: appErrorMsg } = await supabaseAdmin
-      .from("job_applications")
-      .select("total_quote")
-      .eq("id", applicationId)
+    // Try to find the accepted quote negotiation
+    const { data: neg } = await supabaseAdmin
+      .from("negotiations")
+      .select("id, agreed_amount")
+      .eq("application_id", applicationId)
+      .eq("type", "quote")
+      .eq("status", "accepted")
       .maybeSingle();
       
-    if (appErrorMsg) throw appError(500, appErrorMsg.message, "APPLICATION_FETCH_FAILED");
-    if (!app) throw appError(404, "Application not found", "APPLICATION_NOT_FOUND");
-    
-    // Deposit is 20% of the accepted quote amount
-    amount = Number(app.total_quote) * 0.20; 
+    if (neg) {
+      amount = Number(neg.agreed_amount);
+      negotiationId = neg.id;
+    } else {
+      // Fallback: use application's total_quote directly (100% upfront payment)
+      const { data: app, error: appErr } = await supabaseAdmin
+        .from("job_applications")
+        .select("total_quote")
+        .eq("id", applicationId)
+        .maybeSingle();
+        
+      if (appErr) throw appError(500, appErr.message, "APPLICATION_FETCH_FAILED");
+      if (!app) throw appError(404, "Application not found", "APPLICATION_NOT_FOUND");
+      amount = Number(app.total_quote);
+    }
   } else {
     const { data: cat, error: catError } = await supabaseAdmin
       .from("categories")
@@ -53,7 +69,7 @@ export async function initializePayment(userId: string, jobId: string, applicati
     if (catError) throw appError(500, catError.message, "CATEGORY_FETCH_FAILED");
     
     const baseFee = cat ? Number(cat.base_fee) : 0;
-    amount = baseFee > 0 ? baseFee : 20.00;
+    amount = baseFee > 0 ? baseFee : 40.00;
   }
 
   const amountInPesewas = Math.round(amount * 100);
@@ -67,10 +83,32 @@ export async function initializePayment(userId: string, jobId: string, applicati
   const email = profile?.email || "customer@craftmatch.com";
   const reference = `cm_pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+  // Create checkout session in the database if there's a negotiation
+  let sessionId = reference;
+  if (negotiationId) {
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins expiry
+    const { data: session, error: sessError } = await supabaseAdmin
+      .from("checkout_sessions")
+      .insert({
+        job_id: jobId,
+        negotiation_id: negotiationId,
+        amount,
+        reference,
+        status: "pending",
+        expires_at: expiresAt
+      })
+      .select("id")
+      .single();
+      
+    if (sessError) throw appError(500, sessError.message, "CHECKOUT_SESSION_CREATE_FAILED");
+    sessionId = session.id;
+  }
+
   let paystackData: any = null;
   const key = process.env.PAYSTACK_SECRET_KEY;
+  const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
 
-  if (key) {
+  if (key && !isSandbox) {
     try {
       const response = await axios.post(
         `${PAYSTACK_API}/transaction/initialize`,
@@ -84,6 +122,7 @@ export async function initializePayment(userId: string, jobId: string, applicati
             client_id: userId,
             application_id: applicationId || null,
             deposit_amount: amount,
+            checkout_session_id: sessionId,
           },
         },
         {
@@ -100,7 +139,9 @@ export async function initializePayment(userId: string, jobId: string, applicati
   }
 
   const portalBaseUrl = (process.env.VERIFICATION_PORTAL_URL || "https://craft-match-verification-portal.vercel.app").replace(/\/$/, "");
-  const checkout_url = `${portalBaseUrl}/payment-gateway?reference=${reference}`;
+  const checkout_url = isSandbox
+    ? `${portalBaseUrl}/payment-gateway/sandbox?sessionId=${sessionId}`
+    : `${portalBaseUrl}/payment-gateway?sessionId=${sessionId}`;
 
   if (!paystackData) {
     paystackData = {
@@ -120,6 +161,8 @@ export async function initializePayment(userId: string, jobId: string, applicati
   });
 
   if (payError) throw appError(500, payError.message, "PAYMENT_RECORD_FAILED");
+
+  await logEvent(jobId, userId, "payment_initialized", amount, { reference, applicationId });
 
   return {
     reference,
@@ -148,8 +191,21 @@ export async function verifyPayment(reference: string) {
   let isSuccess = false;
   let paystackData: any = payment.paystack_payload || {};
   const key = process.env.PAYSTACK_SECRET_KEY;
+  const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
 
-  if (key) {
+  if (isSandbox) {
+    isSuccess = true;
+    paystackData = {
+      status: "success",
+      gateway_response: "Approved (Sandbox Mode)",
+      amount: Math.round(Number(payment.amount) * 100),
+      metadata: {
+        job_id: payment.job_id,
+        client_id: payment.client_id,
+        deposit_amount: payment.amount,
+      }
+    };
+  } else if (key) {
     try {
       const response = await axios.get(`${PAYSTACK_API}/transaction/verify/${reference}`, {
         headers: {
@@ -219,6 +275,29 @@ export async function verifyPayment(reference: string) {
         .eq("reference", reference);
 
       if (payUpdateErr) throw appError(500, payUpdateErr.message, "PAYMENT_UPDATE_FAILED");
+
+      await logEvent(jobId, clientId, "payment_verified", depositAmount, { reference });
+
+      // Update checkout session and negotiation if exists
+      const { data: session } = await supabaseAdmin
+        .from("checkout_sessions")
+        .update({ status: "completed" })
+        .eq("reference", reference)
+        .select()
+        .maybeSingle();
+
+      if (session) {
+        const { data: neg } = await supabaseAdmin
+          .from("negotiations")
+          .update({ status: "paid" })
+          .eq("id", session.negotiation_id)
+          .select("type")
+          .maybeSingle();
+
+        if (neg?.type === "final_settlement") {
+          await settlementService.processPayoutAndRelease(session.job_id, reference);
+        }
+      }
 
       const { data: job } = await supabaseAdmin
         .from("jobs")
@@ -521,206 +600,93 @@ export async function refundEscrowToClient(jobId: string, refundAmount: number) 
   }
 }
 
+import * as negotiationEngine from "./negotiationEngine";
+
 export async function proposeExtraCharge(userId: string, jobId: string, amount: number, description: string, proposedBy: "worker" | "client") {
-  const { data: job, error: jobErr } = await supabaseAdmin
-    .from("jobs")
-    .select("client_id, worker_id")
-    .eq("id", jobId)
-    .maybeSingle();
-
-  if (jobErr) throw appError(500, jobErr.message, "JOB_FETCH_FAILED");
-  if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
-  if (job.client_id !== userId && job.worker_id !== userId) {
-    throw appError(403, "Not authorized", "FORBIDDEN");
-  }
-
-  await supabaseAdmin
-    .from("job_extra_charges")
-    .update({ status: "rejected" })
-    .eq("job_id", jobId)
-    .in("status", ["pending", "countered"]);
-
-  const { data, error } = await supabaseAdmin
-    .from("job_extra_charges")
-    .insert({
-      job_id: jobId,
-      requested_amount: amount,
-      proposed_by: proposedBy,
-      status: proposedBy === "worker" ? "pending" : "countered",
-      description,
-    })
-    .select()
-    .single();
-
-  if (error) throw appError(500, error.message, "EXTRA_CHARGE_PROPOSE_FAILED");
-
-  if (proposedBy === "worker") {
-    await notifyService.notifyClientExtraChargeProposed(job.client_id, jobId, amount);
-  } else {
-    await notifyService.notifyWorkerExtraChargeCountered(job.worker_id, jobId, amount);
-  }
-
-  return data;
-}
-
-export async function acceptExtraCharge(userId: string, extraChargeId: string) {
-  const { data: charge, error: chargeErr } = await supabaseAdmin
-    .from("job_extra_charges")
-    .select("*, jobs(client_id, worker_id)")
-    .eq("id", extraChargeId)
-    .maybeSingle();
-
-  if (chargeErr) throw appError(500, chargeErr.message, "EXTRA_CHARGE_FETCH_FAILED");
-  if (!charge) throw appError(404, "Extra charge request not found", "EXTRA_CHARGE_NOT_FOUND");
-
-  const job = charge.jobs as any;
-  if (job.client_id !== userId && job.worker_id !== userId) {
-    throw appError(403, "Not authorized", "FORBIDDEN");
-  }
-
-  const { data, error } = await supabaseAdmin
-    .from("job_extra_charges")
-    .update({ status: "accepted" })
-    .eq("id", extraChargeId)
-    .select()
-    .single();
-
-  if (error) throw appError(500, error.message, "EXTRA_CHARGE_ACCEPT_FAILED");
-
-  if (charge.proposed_by === "client" && userId === job.worker_id) {
-    await notifyService.notifyClientExtraChargeAccepted(job.client_id, charge.job_id, Number(charge.requested_amount));
-  } else if (charge.proposed_by === "worker" && userId === job.client_id) {
-    // Proactive notification if client accepts directly
-    await notifyService.notifyClientExtraChargeAccepted(job.client_id, charge.job_id, Number(charge.requested_amount));
-  }
-
-  return data;
-}
-
-export async function counterExtraCharge(userId: string, extraChargeId: string, amount: number) {
-  const { data: charge, error: chargeErr } = await supabaseAdmin
-    .from("job_extra_charges")
-    .select("*, jobs(client_id, worker_id)")
-    .eq("id", extraChargeId)
-    .maybeSingle();
-
-  if (chargeErr) throw appError(500, chargeErr.message, "EXTRA_CHARGE_FETCH_FAILED");
-  if (!charge) throw appError(404, "Extra charge not found", "EXTRA_CHARGE_NOT_FOUND");
-
-  const job = charge.jobs as any;
-  if (job.client_id !== userId && job.worker_id !== userId) {
-    throw appError(403, "Not authorized", "FORBIDDEN");
-  }
-
-  const proposedBy = userId === job.client_id ? "client" : "worker";
-  const newStatus = proposedBy === "worker" ? "pending" : "countered";
-
-  const { data, error } = await supabaseAdmin
-    .from("job_extra_charges")
-    .update({
-      requested_amount: amount,
-      proposed_by: proposedBy,
-      status: newStatus,
-    })
-    .eq("id", extraChargeId)
-    .select()
-    .single();
-
-  if (error) throw appError(500, error.message, "EXTRA_CHARGE_COUNTER_FAILED");
-
-  if (proposedBy === "client") {
-    await notifyService.notifyWorkerExtraChargeCountered(job.worker_id, charge.job_id, amount);
-  } else {
-    await notifyService.notifyClientExtraChargeProposed(job.client_id, charge.job_id, amount);
-  }
-
-  return data;
-}
-
-
-export async function initializeExtraChargePayment(userId: string, extraChargeId: string) {
-  const { data: charge, error: chargeErr } = await supabaseAdmin
-    .from("job_extra_charges")
-    .select("*, jobs(client_id, title)")
-    .eq("id", extraChargeId)
-    .maybeSingle();
-
-  if (chargeErr) throw appError(500, chargeErr.message, "EXTRA_CHARGE_FETCH_FAILED");
-  if (!charge) throw appError(404, "Extra charge not found", "EXTRA_CHARGE_NOT_FOUND");
-
-  const job = charge.jobs as any;
-  if (job.client_id !== userId) throw appError(403, "Unauthorized", "FORBIDDEN");
-  if (charge.status !== "accepted") {
-    throw appError(400, "Extra charge must be accepted before payment", "INVALID_CHARGE_STATE");
-  }
-
-  const amount = Number(charge.requested_amount);
-  const amountInPesewas = Math.round(amount * 100);
-
-  const { data: profile } = await supabaseAdmin
-    .from("profiles")
-    .select("email")
-    .eq("id", userId)
-    .maybeSingle();
-
-  const email = profile?.email || "customer@craftmatch.com";
-  const reference = `cm_ext_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-  let paystackData: any = null;
-  const key = process.env.PAYSTACK_SECRET_KEY;
-
-  if (key) {
-    try {
-      const response = await axios.post(
-        `${PAYSTACK_API}/transaction/initialize`,
-        {
-          email,
-          amount: amountInPesewas,
-          reference,
-          callback_url: `${process.env.EXPRESS_API_BASE_URL || "https://artisansapp-backend.onrender.com/api"}/payments/callback`,
-          metadata: {
-            job_id: charge.job_id,
-            client_id: userId,
-            extra_charge_id: extraChargeId,
-            deposit_amount: amount,
-          },
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${key}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      paystackData = response.data?.data;
-    } catch (err: any) {
-      logger("Paystack Extra Charge Initialize Warning (using fallback):", err.response?.data || err.message);
-    }
-  }
-
-  const portalBaseUrl = (process.env.VERIFICATION_PORTAL_URL || "https://craft-match-verification-portal.vercel.app").replace(/\/$/, "");
-  const checkout_url = `${portalBaseUrl}/payment-gateway?reference=${reference}`;
-
-  if (!paystackData) {
-    paystackData = {
-      authorization_url: checkout_url,
-      reference,
-      status: "pending",
-    };
-  }
-
-  await supabaseAdmin.from("payments").insert({
-    client_id: userId,
-    job_id: charge.job_id,
-    amount,
-    reference,
-    status: "pending",
-    paystack_payload: paystackData,
+  // Proposing an extra charge creates a negotiation in the engine
+  const negotiation = await negotiationEngine.createNegotiation({
+    jobId,
+    type: "extra_charge",
+    initiatorId: userId,
+    initialAmount: amount,
+    description
   });
 
   return {
-    reference,
-    checkout_url,
-    amount,
+    id: negotiation.id,
+    job_id: jobId,
+    requested_amount: amount,
+    proposed_by: proposedBy,
+    status: negotiation.status === "open" ? (proposedBy === "worker" ? "pending" : "countered") : negotiation.status,
+    description
   };
+}
+
+export async function acceptExtraCharge(userId: string, extraChargeId: string) {
+  // Check if extraChargeId is a negotiation ID
+  const negotiation = await negotiationEngine.acceptCurrentProposal(extraChargeId, userId);
+
+  return {
+    id: negotiation.id,
+    job_id: negotiation.job_id,
+    requested_amount: Number(negotiation.agreed_amount),
+    proposed_by: negotiation.initiated_by === userId ? "client" : "worker",
+    status: negotiation.status,
+    description: negotiation.description
+  };
+}
+
+export async function counterExtraCharge(userId: string, extraChargeId: string, amount: number) {
+  const negotiation = await negotiationEngine.proposeAmount(extraChargeId, userId, amount, "Counter-offer");
+
+  const proposedBy = userId === negotiation.accepted_by ? "client" : "worker";
+
+  return {
+    id: negotiation.id,
+    job_id: negotiation.job_id,
+    requested_amount: amount,
+    proposed_by: proposedBy,
+    status: negotiation.status === "open" ? (proposedBy === "worker" ? "pending" : "countered") : negotiation.status,
+    description: negotiation.description
+  };
+}
+
+export async function initializeExtraChargePayment(userId: string, extraChargeId: string) {
+  // Deprecated in favor of Phase 5 Final Settlement collection,
+  // but kept for backward compatibility by throwing a clear error.
+  throw appError(400, "Individual extra charge payment is deprecated. Extra charges must be paid during final job completion settlement.", "DEPRECATED_FLOW");
+}
+
+export async function getCheckoutSession(sessionId: string) {
+  const { data: session, error } = await supabaseAdmin
+    .from("checkout_sessions")
+    .select(`
+      *,
+      job:jobs (
+        title,
+        client:profiles!jobs_client_id_fkey (full_name),
+        worker:profiles!jobs_worker_id_fkey (full_name),
+        categories (name, icon_name, color_hex)
+      ),
+      negotiation:negotiations (
+        type,
+        description
+      )
+    `)
+    .eq("id", sessionId)
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "CHECKOUT_SESSION_FETCH_FAILED");
+  if (!session) throw appError(404, "Checkout session not found", "CHECKOUT_SESSION_NOT_FOUND");
+
+  // Check if session has expired
+  if (new Date() > new Date(session.expires_at)) {
+    await supabaseAdmin
+      .from("checkout_sessions")
+      .update({ status: "expired" })
+      .eq("id", sessionId);
+    session.status = "expired";
+  }
+
+  return session;
 }

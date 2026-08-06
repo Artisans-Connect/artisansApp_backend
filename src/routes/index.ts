@@ -13,6 +13,7 @@ import searchRouter from "./search";
 import tradesRouter from "./trades";
 import releasesRouter from "./releases";
 import paymentsRouter from "./payments";
+import negotiationsRouter from "./negotiations";
 
 const router = Router();
 
@@ -31,5 +32,6 @@ router.use("/search", searchRouter);
 router.use("/trades", tradesRouter);
 router.use("/releases", releasesRouter);
 router.use("/payments", paymentsRouter);
+router.use("/negotiations", negotiationsRouter);
 
 export default router;

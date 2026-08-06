@@ -1,7 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { authMiddleware } from "../middleware/auth";
+import { idempotencyMiddleware } from "../middleware/idempotency";
 import * as paymentsService from "../services/paymentsService";
+import * as settlementService from "../services/settlementService";
+import * as negotiationEngine from "../services/negotiationEngine";
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
 import { logger } from "../utils/logger";
@@ -34,7 +37,7 @@ function verifyPaystackSignature(req: Request, res: Response, next: NextFunction
  * POST /api/payments/initialize
  * Body: { jobId: string, applicationId?: string }
  */
-router.post("/initialize", authMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+router.post("/initialize", authMiddleware, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { jobId, applicationId } = req.body;
     if (!jobId) {
@@ -317,6 +320,85 @@ router.post("/extra-charge/counter", authMiddleware, async (req: Request, res: R
 
     const result = await paymentsService.counterExtraCharge(req.user!.id, extraChargeId, Number(amount));
     res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/payments/checkout-session/:id
+ */
+router.get("/checkout-session/:id", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const session = await paymentsService.getCheckoutSession(req.params.id);
+    res.status(200).json({ success: true, data: session });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/payments/sandbox/callback
+ * Body: { reference: string }
+ */
+router.post("/sandbox/callback", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reference } = req.body;
+    if (!reference) {
+      next(appError(400, "reference is required", "VALIDATION_ERROR"));
+      return;
+    }
+
+    if (process.env.USE_SANDBOX_PAYMENTS !== "true") {
+      next(appError(400, "Sandbox payments are not enabled", "BAD_REQUEST"));
+      return;
+    }
+
+    const result = await paymentsService.verifyPayment(reference);
+    res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/payments/settlement/:jobId
+ */
+router.get("/settlement/:jobId", authMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const calculation = await settlementService.calculateSettlement(req.params.jobId);
+    res.status(200).json({ success: true, data: calculation });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/payments/settlement/:jobId/checkout
+ */
+router.post("/settlement/:jobId/checkout", authMiddleware, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const calculation = await settlementService.calculateSettlement(req.params.jobId);
+    if (calculation.outstanding_balance <= 0) {
+      // Direct release without checkout since outstanding balance is 0
+      const result = await settlementService.processPayoutAndRelease(req.params.jobId);
+      res.status(200).json({ success: true, message: "Escrow released successfully", data: result });
+      return;
+    }
+
+    // Initialize payment for outstanding balance:
+    // 1. Create a final_settlement negotiation round
+    const negotiation = await negotiationEngine.createNegotiation({
+      jobId: req.params.jobId,
+      type: "final_settlement",
+      initiatorId: req.user!.id,
+      initialAmount: calculation.gross_amount,
+      description: "Final completion settlement"
+    });
+
+    // 2. Initialize checkout session
+    const paymentInit = await paymentsService.initializePayment(req.user!.id, req.params.jobId);
+    res.status(200).json({ success: true, data: paymentInit });
   } catch (err) {
     next(err);
   }
