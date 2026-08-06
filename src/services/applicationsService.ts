@@ -138,7 +138,7 @@ export async function listApplicationsForJob(clientId: string, jobId: string) {
   const { data: applications, error } = await supabaseAdmin
     .from("job_applications")
     .select(
-      "id, job_id, worker_id, status, message, proposed_rate, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, worker:profiles!job_applications_worker_id_fkey(full_name, avatar_url, phone)",
+      "id, job_id, worker_id, status, message, proposed_rate, counter_rate, last_proposed_by, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, worker:profiles!job_applications_worker_id_fkey(full_name, avatar_url, phone)",
     )
     .eq("job_id", jobId)
     .order("created_at", { ascending: true });
@@ -164,7 +164,7 @@ export async function listWorkerApplications(workerId: string) {
   const { data, error } = await supabaseAdmin
     .from("job_applications")
     .select(
-      "id, job_id, worker_id, status, message, proposed_rate, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, job:jobs!job_applications_job_id_fkey(id, title, status, address_label, budget_fixed, budget_min, budget_max, created_at, categories(name, icon_name, color_hex))",
+      "id, job_id, worker_id, status, message, proposed_rate, counter_rate, last_proposed_by, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, job:jobs!job_applications_job_id_fkey(id, title, status, address_label, budget_fixed, budget_min, budget_max, created_at, categories(name, icon_name, color_hex))",
     )
     .eq("worker_id", workerId)
     .in("status", ["pending", "accepted"])
