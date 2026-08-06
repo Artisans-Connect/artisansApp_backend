@@ -132,17 +132,18 @@ export async function initializePayment(userId: string, jobId: string, applicati
  * Verifies a transaction reference on Paystack, changes job status, and locks funds in escrow.
  */
 export async function verifyPayment(reference: string) {
-  const { data: payment, error: fetchPayErr } = await supabaseAdmin
-    .from("payments")
-    .select("*")
-    .eq("reference", reference)
-    .maybeSingle();
+  try {
+    const { data: payment, error: fetchPayErr } = await supabaseAdmin
+      .from("payments")
+      .select("*")
+      .eq("reference", reference)
+      .maybeSingle();
 
-  if (fetchPayErr) throw appError(500, fetchPayErr.message, "PAYMENT_FETCH_FAILED");
-  if (!payment) throw appError(404, "Payment record not found", "PAYMENT_NOT_FOUND");
-  if (payment.status === "completed") {
-    return { success: true, message: "Payment already processed" };
-  }
+    if (fetchPayErr) throw appError(500, fetchPayErr.message, "PAYMENT_FETCH_FAILED");
+    if (!payment) throw appError(404, "Payment record not found", "PAYMENT_NOT_FOUND");
+    if (payment.status === "completed") {
+      return { success: true, message: "Payment already processed" };
+    }
 
   let isSuccess = false;
   let paystackData: any = payment.paystack_payload || {};
