@@ -250,6 +250,7 @@ function determineCancellationStage(jobStatus: string, jobUpdatedAt: string | nu
     case JOB_STATUS.DRAFT:
     case JOB_STATUS.SEARCHING:
     case JOB_STATUS.MATCHING:
+    case JOB_STATUS.AWAITING_PAYMENT:
     // A confirmed scheduled job hasn't started (no travel, no work), so the
     // client can cancel it freely before activation.
     case JOB_STATUS.SCHEDULED_CONFIRMED:
