@@ -8,6 +8,7 @@ import {
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
 import { quoteForWorkerApplication } from "./workerQuoteService";
+import * as negotiationEngine from "./negotiationEngine";
 
 type ApplyToJobInput = {
   message?: unknown;
@@ -99,6 +100,8 @@ export async function applyToJob(workerId: string, jobId: string, body?: ApplyTo
         total_quote: effectiveTotalQuote,
         quote_currency: quote.quote_currency,
         quoted_at: quote.quoted_at,
+        last_proposed_by: "worker",
+        counter_rate: null,
       },
       { onConflict: "job_id,worker_id" },
     )
@@ -136,7 +139,7 @@ export async function listApplicationsForJob(clientId: string, jobId: string) {
   const { data: applications, error } = await supabaseAdmin
     .from("job_applications")
     .select(
-      "id, job_id, worker_id, status, message, proposed_rate, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, worker:profiles!job_applications_worker_id_fkey(full_name, avatar_url, phone)",
+      "id, job_id, worker_id, status, message, proposed_rate, counter_rate, last_proposed_by, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, worker:profiles!job_applications_worker_id_fkey(full_name, avatar_url, phone)",
     )
     .eq("job_id", jobId)
     .order("created_at", { ascending: true });
@@ -162,7 +165,7 @@ export async function listWorkerApplications(workerId: string) {
   const { data, error } = await supabaseAdmin
     .from("job_applications")
     .select(
-      "id, job_id, worker_id, status, message, proposed_rate, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, job:jobs!job_applications_job_id_fkey(id, title, status, address_label, budget_fixed, budget_min, budget_max, created_at, categories(name, icon_name, color_hex))",
+      "id, job_id, worker_id, status, message, proposed_rate, counter_rate, last_proposed_by, distance_km, distance_cost, base_service_fee, urgency_premium, total_quote, quote_currency, quoted_at, created_at, job:jobs!job_applications_job_id_fkey(id, title, status, address_label, budget_fixed, budget_min, budget_max, created_at, categories(name, icon_name, color_hex))",
     )
     .eq("worker_id", workerId)
     .in("status", ["pending", "accepted"])
@@ -223,7 +226,7 @@ export async function acceptApplication(clientId: string, jobId: string, applica
   if (!isScheduled) {
     await ensureWorkerHasNoActiveJob(application.worker_id, jobId);
   }
-  const nextStatus = isScheduled ? JOB_STATUS.SCHEDULED_CONFIRMED : JOB_STATUS.MATCHED;
+  const nextStatus = JOB_STATUS.AWAITING_PAYMENT;
 
   const now = new Date().toISOString();
   const { data: updatedJob, error: updateError } = await supabaseAdmin
@@ -299,3 +302,110 @@ export async function withdrawApplication(workerId: string, jobId: string) {
 
   return { success: true };
 }
+
+export async function counterApplication(clientId: string, applicationId: string, counterRate: number) {
+  const { data: application, error: applicationError } = await supabaseAdmin
+    .from("job_applications")
+    .select("*, jobs(client_id)")
+    .eq("id", applicationId)
+    .maybeSingle();
+
+  if (applicationError) throw appError(500, applicationError.message, "APPLICATION_FETCH_FAILED");
+  if (!application) throw appError(404, "Application not found", "APPLICATION_NOT_FOUND");
+  if (application.status !== "pending") {
+    throw appError(400, "Only pending applications can be countered", "INVALID_APPLICATION_STATE");
+  }
+
+  const job = application.jobs as any;
+  if (job.client_id !== clientId) {
+    throw appError(403, "Not authorized to counter this application", "FORBIDDEN");
+  }
+
+  // Find or create negotiation
+  let negotiationId: string;
+  const { data: existingNeg } = await supabaseAdmin
+    .from("negotiations")
+    .select("id")
+    .eq("application_id", applicationId)
+    .eq("type", "quote")
+    .maybeSingle();
+
+  if (existingNeg) {
+    negotiationId = existingNeg.id;
+  } else {
+    const newNeg = await negotiationEngine.createNegotiation({
+      jobId: application.job_id,
+      applicationId,
+      type: "quote",
+      initiatorId: application.worker_id,
+      initialAmount: Number(application.total_quote),
+      description: "Job bidding initiated"
+    });
+    negotiationId = newNeg.id;
+  }
+
+  // Submit counter-offer to negotiation engine
+  await negotiationEngine.proposeAmount(negotiationId, clientId, counterRate, "Client counter-offer");
+
+  const { data: updatedApp, error: updateError } = await supabaseAdmin
+    .from("job_applications")
+    .update({
+      last_proposed_by: "client",
+      counter_rate: counterRate,
+    })
+    .eq("id", applicationId)
+    .select()
+    .single();
+
+  if (updateError) throw appError(500, updateError.message, "APPLICATION_COUNTER_FAILED");
+
+  return updatedApp;
+}
+
+export async function acceptCounterOffer(workerId: string, applicationId: string) {
+  const { data: application, error: applicationError } = await supabaseAdmin
+    .from("job_applications")
+    .select("*, jobs(client_id, status, job_mode)")
+    .eq("id", applicationId)
+    .eq("worker_id", workerId)
+    .maybeSingle();
+
+  if (applicationError) throw appError(500, applicationError.message, "APPLICATION_FETCH_FAILED");
+  if (!application) throw appError(404, "Application not found", "APPLICATION_NOT_FOUND");
+  if (application.status !== "pending" || application.last_proposed_by !== "client" || !application.counter_rate) {
+    throw appError(400, "No pending counter offer from client exists for this application", "INVALID_APPLICATION_STATE");
+  }
+
+  const job = application.jobs as any;
+  if (![JOB_STATUS.SEARCHING, JOB_STATUS.MATCHING].includes(job.status)) {
+    throw appError(409, "Job is no longer open for applications", "INVALID_JOB_STATE");
+  }
+
+  // Find the open negotiation
+  const { data: existingNeg } = await supabaseAdmin
+    .from("negotiations")
+    .select("id")
+    .eq("application_id", applicationId)
+    .eq("type", "quote")
+    .eq("status", "open")
+    .maybeSingle();
+
+  if (!existingNeg) {
+    throw appError(400, "No open negotiation found for this application", "NEGOTIATION_NOT_FOUND");
+  }
+
+  // Accept current proposal in the negotiation engine
+  await negotiationEngine.acceptCurrentProposal(existingNeg.id, workerId);
+
+  // Fetch and return updated job
+  const { data: updatedJob, error: jobFetchError } = await supabaseAdmin
+    .from("jobs")
+    .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone)")
+    .eq("id", application.job_id)
+    .single();
+
+  if (jobFetchError) throw appError(500, jobFetchError.message, "JOB_FETCH_FAILED");
+
+  return updatedJob;
+}
+

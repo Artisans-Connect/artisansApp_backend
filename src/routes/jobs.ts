@@ -69,6 +69,25 @@ router.post(
   }),
 );
 
+router.post(
+  "/:id/applications/:applicationId/counter",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const { counterRate } = req.body;
+    if (counterRate === undefined || Number(counterRate) <= 0) {
+      res.status(400).json({ success: false, error: "Valid counterRate is required" });
+      return;
+    }
+    const application = await applicationsService.counterApplication(
+      req.user!.id,
+      paramId(req.params.applicationId),
+      Number(counterRate)
+    );
+    res.status(200).json({ success: true, data: application });
+  }),
+);
+
+
 router.get(
   "/:id/matching-progress",
   authMiddleware,

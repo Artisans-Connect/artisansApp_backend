@@ -69,29 +69,9 @@ src/
 
 For a detailed breakdown of available endpoints and architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
-## Maintained Backend Wiki
-
-OpenWiki maintains an agent-friendly wiki in [`openwiki/`](./openwiki/). It is
-intentionally scoped to this backend repository: it does not claim to describe
-the mobile/web client or verification portal. The wiki brief in
-[`openwiki/INSTRUCTIONS.md`](./openwiki/INSTRUCTIONS.md) defines those boundaries
-and tells the generator how to document integrations honestly.
-
-For a local first run:
-
-```bash
-npm run docs:wiki:init
-```
-
-To refresh it later:
-
-```bash
-npm run docs:wiki:update
-```
-
-GitHub Actions refreshes the wiki weekly and on demand, then creates or updates
-a documentation pull request. Add `OPENROUTER_API_KEY` as a repository Actions
-secret; locally the same variable is read from `.env`.
+## Project Documentation
+ 
+Detailed implementation documents are maintained in [`documentation/`](./documentation/). It is intentionally scoped to this backend repository: it does not claim to describe the mobile/web client or verification portal.
 
 ## App Release Delivery
 

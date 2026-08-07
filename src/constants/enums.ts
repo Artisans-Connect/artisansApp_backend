@@ -1,5 +1,6 @@
 export const JOB_STATUS = {
   DRAFT: "draft",
+  AWAITING_PAYMENT: "awaiting_payment",
   SEARCHING: "searching",
   MATCHING: "matching",
   MATCHED: "matched",
@@ -14,6 +15,7 @@ export const JOB_STATUS = {
   CANCELLED: "cancelled",
   EXPIRED: "expired",
 } as const;
+
 
 export const JOB_MODE = {
   ASAP: "asap",

@@ -14,6 +14,7 @@ import tradesRouter from "./trades";
 import releasesRouter from "./releases";
 import paymentsRouter from "./payments";
 import reportsRouter from "./reports";
+import negotiationsRouter from "./negotiations";
 
 const router = Router();
 
@@ -33,5 +34,6 @@ router.use("/trades", tradesRouter);
 router.use("/releases", releasesRouter);
 router.use("/payments", paymentsRouter);
 router.use("/reports", reportsRouter);
+router.use("/negotiations", negotiationsRouter);
 
 export default router;

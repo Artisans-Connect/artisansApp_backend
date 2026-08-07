@@ -124,6 +124,19 @@ router.post(
   }),
 );
 
+router.post(
+  "/applications/:applicationId/accept-counter",
+  authMiddleware,
+  catchAsync(async (req: Request, res: Response) => {
+    const job = await applicationsService.acceptCounterOffer(
+      req.user!.id,
+      paramId(req.params.applicationId),
+    );
+    res.status(200).json({ success: true, data: job });
+  }),
+);
+
+
 router.get(
   "/me/history",
   authMiddleware,
