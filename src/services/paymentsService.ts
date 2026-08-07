@@ -138,6 +138,8 @@ export async function initializePayment(userId: string, jobId: string, applicati
   if (sessError) throw appError(500, sessError.message, "CHECKOUT_SESSION_CREATE_FAILED");
   const sessionId = session.id;
 
+  console.log(`[PAYMENT] Initializing payment. Client: ${userId}, Job: ${jobId}, Application: ${applicationId || 'none'}, Amount: ${amount}, Reference: ${reference}, SessionID: ${sessionId}`);
+
   let paystackData: any = null;
   const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
 
@@ -187,6 +189,8 @@ export async function initializePayment(userId: string, jobId: string, applicati
 
   await logEvent(jobId, userId, "payment_initialized", amount, { reference, applicationId });
 
+  console.log(`[PAYMENT] Payment initialized successfully. Checkout URL: ${checkout_url}`);
+
   return {
     reference,
     checkout_url,
@@ -195,6 +199,7 @@ export async function initializePayment(userId: string, jobId: string, applicati
 }
 
 export async function verifyPayment(reference: string) {
+  console.log(`[PAYMENT] Verifying payment reference: ${reference}`);
   try {
     const { data: payment, error: fetchPayErr } = await supabaseAdmin
       .from("payments")
@@ -205,6 +210,7 @@ export async function verifyPayment(reference: string) {
     if (fetchPayErr) throw appError(500, fetchPayErr.message, "PAYMENT_FETCH_FAILED");
     if (!payment) throw appError(404, "Payment record not found", "PAYMENT_NOT_FOUND");
     if (payment.status === "completed") {
+      console.log(`[PAYMENT] Payment reference: ${reference} already processed`);
       return { success: true, message: "Payment already processed" };
     }
 
@@ -234,14 +240,34 @@ export async function verifyPayment(reference: string) {
         paystackData = { status: "success", gateway_response: "Approved (Test Mode)" };
       }
     }
-
     if (isSuccess) {
       const metadata = paystackData.metadata || {};
       const jobId = metadata.job_id || payment.job_id;
       const clientId = metadata.client_id || payment.client_id;
-      const applicationId = metadata.application_id;
+      let applicationId = metadata.application_id;
       const extraChargeId = metadata.extra_charge_id;
       const depositAmount = Number(metadata.deposit_amount || payment.amount);
+
+      if (!applicationId) {
+        // Fallback for sandbox payments or missing metadata: look up via checkout_sessions and negotiations
+        const { data: sess } = await supabaseAdmin
+          .from("checkout_sessions")
+          .select("negotiation_id")
+          .eq("reference", reference)
+          .maybeSingle();
+        
+        if (sess?.negotiation_id) {
+          const { data: neg } = await supabaseAdmin
+            .from("negotiations")
+            .select("application_id")
+            .eq("id", sess.negotiation_id)
+            .maybeSingle();
+          if (neg?.application_id) {
+            applicationId = neg.application_id;
+            console.log(`[PAYMENT] Resolved applicationId from database: ${applicationId}`);
+          }
+        }
+      }
 
       if (extraChargeId) {
         const { error: payUpdateErr } = await supabaseAdmin
@@ -373,15 +399,18 @@ export async function verifyPayment(reference: string) {
                 .update({ is_available: false, updated_at: new Date().toISOString() })
                 .eq("id", app.worker_id);
             }
+            console.log(`[PAYMENT] Job status updated to ${nextJobStatus} and assigned to worker ${app.worker_id}`);
           }
         } else {
           await supabaseAdmin
             .from("jobs")
             .update({ status: JOB_STATUS.MATCHING })
             .eq("id", jobId);
+          console.log(`[PAYMENT] Job reset to MATCHING status`);
         }
       }
 
+      console.log(`[PAYMENT] Depositing GHS ${depositAmount} into escrow for job ${jobId}`);
       await supabaseAdmin.from("job_escrow_balances").upsert({
         job_id: jobId,
         held_amount: depositAmount,
@@ -396,6 +425,7 @@ export async function verifyPayment(reference: string) {
         type: "deposit",
         reference: reference,
       });
+      console.log(`[PAYMENT] Escrow balance and ledger successfully written`);
 
       return { success: true, message: "Payment processed successfully" };
     } else {
