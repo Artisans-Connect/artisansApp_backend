@@ -286,6 +286,54 @@ export async function withdrawApplication(workerId: string, jobId: string) {
 
   if (fetchError) throw appError(500, fetchError.message, "FETCH_APPLICATION_FAILED");
   if (!app) throw appError(404, "Application not found", "APPLICATION_NOT_FOUND");
+
+  if (app.status === "accepted") {
+    // If the application was accepted, they can only withdraw if the job is still awaiting payment
+    const { data: job, error: jobErr } = await supabaseAdmin
+      .from("jobs")
+      .select("status, client_id")
+      .eq("id", jobId)
+      .maybeSingle();
+
+    if (jobErr) throw appError(500, jobErr.message, "FETCH_JOB_FAILED");
+    if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
+
+    if (job.status !== JOB_STATUS.AWAITING_PAYMENT) {
+      throw appError(400, "Cannot withdraw application after payment has been completed. Use the job cancellation flow instead.", "INVALID_APPLICATION_STATE");
+    }
+
+    // Reset job back to searching/matching, clear worker_id
+    const { error: jobUpdateErr } = await supabaseAdmin
+      .from("jobs")
+      .update({
+        status: JOB_STATUS.SEARCHING,
+        worker_id: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", jobId);
+
+    if (jobUpdateErr) throw appError(500, jobUpdateErr.message, "JOB_UPDATE_FAILED");
+
+    // Set the application to withdrawn
+    const { error: updateError } = await supabaseAdmin
+      .from("job_applications")
+      .update({ status: "withdrawn" })
+      .eq("job_id", jobId)
+      .eq("worker_id", workerId);
+
+    if (updateError) throw appError(500, updateError.message, "WITHDRAW_APPLICATION_FAILED");
+
+    // Notify the client
+    await notifyService.sendToUser(job.client_id, {
+      title: "Artisan Withdrew Interest",
+      body: "The selected artisan withdrew their interest. Your job is back in search.",
+      data: { jobId, type: "worker_withdrew" }
+    });
+
+    await matchingService.recordDecline(jobId, workerId);
+    return { success: true };
+  }
+
   if (app.status !== "pending") {
     throw appError(400, "Only pending applications can be withdrawn", "INVALID_APPLICATION_STATE");
   }

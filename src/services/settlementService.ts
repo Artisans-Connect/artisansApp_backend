@@ -35,9 +35,25 @@ export async function calculateSettlement(jobId: string) {
     .eq("job_id", jobId)
     .maybeSingle();
 
-  const escrowHeld = escrow ? Number(escrow.held_amount) : 0;
+  const escrowHeld = escrow ? Number(escrow.held_amount || 0) : 0;
+  const initialEscrow = baseRate + distanceCost + urgencyPremium;
 
-  // 3. Find if there is an accepted final_settlement negotiation
+  // 3. Fetch accepted extra charges with descriptions
+  const { data: extraCharges } = await supabaseAdmin
+    .from("negotiations")
+    .select("agreed_amount, description, created_at")
+    .eq("job_id", jobId)
+    .eq("type", "extra_charge")
+    .eq("status", "accepted");
+
+  const totalExtra = extraCharges ? extraCharges.reduce((sum, c) => sum + Number(c.agreed_amount || 0), 0) : 0;
+  const formattedExtraCharges = (extraCharges || []).map((c) => ({
+    amount: Number(c.agreed_amount || 0),
+    description: c.description || "Extra materials/labor",
+    created_at: c.created_at,
+  }));
+
+  // 4. Find if there is an accepted final_settlement negotiation
   const { data: finalNeg } = await supabaseAdmin
     .from("negotiations")
     .select("id, agreed_amount")
@@ -46,21 +62,10 @@ export async function calculateSettlement(jobId: string) {
     .eq("status", "accepted")
     .maybeSingle();
 
-  let finalAmount = baseRate + distanceCost + urgencyPremium;
+  let finalAmount = initialEscrow + totalExtra;
 
   if (finalNeg) {
     finalAmount = Number(finalNeg.agreed_amount);
-  } else {
-    // Or if there are extra charges, add them
-    const { data: extraCharges } = await supabaseAdmin
-      .from("negotiations")
-      .select("agreed_amount")
-      .eq("job_id", jobId)
-      .eq("type", "extra_charge")
-      .eq("status", "accepted");
-
-    const totalExtra = extraCharges ? extraCharges.reduce((sum, c) => sum + Number(c.agreed_amount || 0), 0) : 0;
-    finalAmount += totalExtra;
   }
 
   const platformFee = Math.round((finalAmount * 0.10) * 100) / 100;
@@ -69,6 +74,9 @@ export async function calculateSettlement(jobId: string) {
 
   return {
     job_id: jobId,
+    initial_escrow: initialEscrow,
+    extra_charges: formattedExtraCharges,
+    total_extra_charges: totalExtra,
     escrow_held: escrowHeld,
     gross_amount: finalAmount,
     platform_fee: platformFee,

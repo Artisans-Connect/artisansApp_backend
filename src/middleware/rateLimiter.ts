@@ -1,6 +1,6 @@
 import rateLimit from "express-rate-limit";
 
-export const rateLimiter = rateLimit({
+const rateLimitInstance = rateLimit({
   windowMs: 60 * 1000,
   limit: 100,
   standardHeaders: true,
@@ -10,3 +10,11 @@ export const rateLimiter = rateLimit({
     code: "RATE_LIMIT_EXCEEDED",
   },
 });
+
+export const rateLimiter = (req: any, res: any, next: any) => {
+  if (process.env.NODE_ENV !== "production") {
+    next();
+    return;
+  }
+  return rateLimitInstance(req, res, next);
+};

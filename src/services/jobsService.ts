@@ -13,6 +13,7 @@ import {
 } from "./jobLifecycle";
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
+import * as walletService from "./walletService";
 
 
 const UUID_RE =
@@ -250,6 +251,7 @@ function determineCancellationStage(jobStatus: string, jobUpdatedAt: string | nu
     case JOB_STATUS.DRAFT:
     case JOB_STATUS.SEARCHING:
     case JOB_STATUS.MATCHING:
+    case JOB_STATUS.AWAITING_PAYMENT:
     // A confirmed scheduled job hasn't started (no travel, no work), so the
     // client can cancel it freely before activation.
     case JOB_STATUS.SCHEDULED_CONFIRMED:
@@ -515,6 +517,14 @@ export async function cancelJob(userId: string, jobId: string, body: unknown) {
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
   if (job.client_id !== userId) throw appError(403, "Not allowed to cancel this job", "FORBIDDEN");
 
+  if (job.status === JOB_STATUS.PENDING_CLIENT_APPROVAL || job.work_ended_at != null) {
+    throw appError(
+      409,
+      "Work has already been completed by the artisan. Cancellation is disabled at this stage; please approve completion or open a dispute.",
+      "JOB_WORK_COMPLETED",
+    );
+  }
+
   // Determine cancellation stage
   const { stage, canCancel } = determineCancellationStage(job.status, job.updated_at);
 
@@ -580,6 +590,53 @@ export async function cancelJob(userId: string, jobId: string, body: unknown) {
       feeResult.amount,
     );
   }
+  // Escrow balance refund handling to Client/Worker wallet
+  const { data: escrow } = await supabaseAdmin
+    .from("job_escrow_balances")
+    .select("*")
+    .eq("job_id", jobId)
+    .maybeSingle();
+
+  if (escrow && Number(escrow.held_amount) > 0) {
+    const held = Number(escrow.held_amount);
+    const fee = Number(feeResult.amount || 0);
+    const refundToClient = Math.max(0, held - fee);
+    const ref = `cancel_ref_${jobId.substring(0, 8)}_${Date.now()}`;
+
+    if (refundToClient > 0) {
+      await walletService.creditWallet({
+        userId,
+        amount: refundToClient,
+        reference: `${ref}_client`,
+        type: "refund",
+        jobId,
+        description: `Refund for cancelled job: ${job.title}`,
+      });
+    }
+
+    if (fee > 0 && job.worker_id) {
+      await walletService.creditWallet({
+        userId: job.worker_id,
+        amount: fee,
+        reference: `${ref}_worker_fee`,
+        type: "cancellation_fee",
+        jobId,
+        description: `Cancellation compensation fee for job: ${job.title}`,
+      });
+    }
+
+    await supabaseAdmin
+      .from("job_escrow_balances")
+      .update({
+        held_amount: 0,
+        refunded_amount: refundToClient,
+        released_amount: fee,
+        status: "refunded",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("job_id", jobId);
+  }
+
   await releaseWorkerAfterTerminalJob(job.worker_id);
 
   return data;

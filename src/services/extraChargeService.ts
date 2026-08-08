@@ -3,7 +3,6 @@ import { appError } from "../utils/appError";
 import * as negotiationEngine from "./negotiationEngine";
 
 export async function requestExtraCharge(jobId: string, workerId: string, amount: number, description: string) {
-  // 1. Fetch job to verify status and worker assignment
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
     .select("id, worker_id, status")
@@ -16,13 +15,11 @@ export async function requestExtraCharge(jobId: string, workerId: string, amount
     throw appError(403, "Only the assigned worker can request extra charges", "FORBIDDEN");
   }
 
-  // Allow extra charges in progressed states
   const allowedStatuses = ["arrived", "in_progress", "matched"];
   if (!allowedStatuses.includes(job.status)) {
     throw appError(409, "Extra charges can only be requested after a job is booked and active", "INVALID_JOB_STATE");
   }
 
-  // 2. Propose extra charge using negotiation engine
   return negotiationEngine.createNegotiation({
     jobId,
     type: "extra_charge",
@@ -47,4 +44,55 @@ export async function getOutstandingExtraCharges(jobId: string) {
 export async function getTotalExtraCharges(jobId: string): Promise<number> {
   const charges = await getOutstandingExtraCharges(jobId);
   return charges.reduce((sum, charge) => sum + Number(charge.agreed_amount || 0), 0);
+}
+
+export async function proposeExtraCharge(userId: string, jobId: string, amount: number, description: string, proposedBy: "worker" | "client") {
+  const negotiation = await negotiationEngine.createNegotiation({
+    jobId,
+    type: "extra_charge",
+    initiatorId: userId,
+    initialAmount: amount,
+    description
+  });
+
+  return {
+    id: negotiation.id,
+    job_id: jobId,
+    requested_amount: amount,
+    proposed_by: proposedBy,
+    status: negotiation.status === "open" ? (proposedBy === "worker" ? "pending" : "countered") : negotiation.status,
+    description
+  };
+}
+
+export async function acceptExtraCharge(userId: string, extraChargeId: string) {
+  const negotiation = await negotiationEngine.acceptCurrentProposal(extraChargeId, userId);
+
+  return {
+    id: negotiation.id,
+    job_id: negotiation.job_id,
+    requested_amount: Number(negotiation.agreed_amount),
+    proposed_by: negotiation.initiated_by === userId ? "client" : "worker",
+    status: negotiation.status,
+    description: negotiation.description
+  };
+}
+
+export async function counterExtraCharge(userId: string, extraChargeId: string, amount: number) {
+  const negotiation = await negotiationEngine.proposeAmount(extraChargeId, userId, amount, "Counter-offer");
+
+  const proposedBy = userId === negotiation.accepted_by ? "client" : "worker";
+
+  return {
+    id: negotiation.id,
+    job_id: negotiation.job_id,
+    requested_amount: amount,
+    proposed_by: proposedBy,
+    status: negotiation.status === "open" ? (proposedBy === "worker" ? "pending" : "countered") : negotiation.status,
+    description: negotiation.description
+  };
+}
+
+export async function initializeExtraChargePayment(userId: string, extraChargeId: string) {
+  throw appError(400, "Individual extra charge payment is deprecated. Extra charges must be paid during final job completion settlement.", "DEPRECATED_FLOW");
 }

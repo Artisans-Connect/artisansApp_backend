@@ -15,6 +15,9 @@ import releasesRouter from "./releases";
 import paymentsRouter from "./payments";
 import reportsRouter from "./reports";
 import negotiationsRouter from "./negotiations";
+import walletRouter from "./wallet";
+import disputesRouter from "./disputes";
+import payoutsRouter from "./payouts";
 
 const router = Router();
 
@@ -35,5 +38,8 @@ router.use("/releases", releasesRouter);
 router.use("/payments", paymentsRouter);
 router.use("/reports", reportsRouter);
 router.use("/negotiations", negotiationsRouter);
+router.use("/wallet", walletRouter);
+router.use("/disputes", disputesRouter);
+router.use("/payouts", payoutsRouter);
 
 export default router;
