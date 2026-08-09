@@ -129,27 +129,36 @@ router.get("/callback", async (req: Request, res: Response) => {
           margin-bottom: 30px;
         }
         .btn {
-          display: inline-block;
+          display: block;
+          width: 100%;
+          box-sizing: border-box;
           background-color: #2ec4b6;
           color: white;
-          padding: 12px 30px;
+          padding: 14px 20px;
           text-decoration: none;
           border-radius: 12px;
           font-weight: bold;
           font-size: 16px;
-          transition: background-color 0.2s;
+          margin-bottom: 12px;
+          border: none;
+          cursor: pointer;
         }
-        .btn:hover {
-          background-color: #20a396;
+        .btn-secondary {
+          background-color: #0f172a;
         }
       </style>
+      <script>
+        // Attempt deep-link automatically on load for mobile app
+        window.location.href = "craftmatch://payment-success?reference=${reference}";
+      </script>
     </head>
     <body>
       <div class="card">
         <div class="icon">✓</div>
         <h1>Payment Successful!</h1>
-        <p>Your deposit has been securely placed in escrow. You can now close this window and return to CraftMatch to view your booking matching status.</p>
-        <a href="craftmatch://payment-success?reference=${reference}" class="btn">Return to App</a>
+        <p>Your deposit has been securely placed in escrow. You can now close this tab or return to the CraftMatch app.</p>
+        <a href="craftmatch://payment-success?reference=${reference}" class="btn">Return to Mobile App</a>
+        <button onclick="window.close(); history.back();" class="btn btn-secondary">Close / Return</button>
       </div>
     </body>
     </html>
