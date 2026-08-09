@@ -26,6 +26,7 @@ export async function initializeTransaction(
       {
         email,
         amount: amountInPesewas,
+        currency: "GHS",
         reference,
         callback_url: callbackUrl,
         metadata,
