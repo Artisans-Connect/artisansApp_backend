@@ -201,16 +201,36 @@ export async function initializePayment(userId: string, jobId: string, applicati
 export async function verifyPayment(reference: string) {
   console.log(`[PAYMENT] Verifying payment reference: ${reference}`);
   try {
-    const { data: payment, error: fetchPayErr } = await supabaseAdmin
+    let { data: payment, error: fetchPayErr } = await supabaseAdmin
       .from("payments")
       .select("*")
       .eq("reference", reference)
       .maybeSingle();
 
+    // If not found by reference directly, check if reference belongs to a checkout_session that was updated
+    if (!payment) {
+      const { data: session } = await supabaseAdmin
+        .from("checkout_sessions")
+        .select("reference")
+        .or(`reference.eq.${reference},id.eq.${reference}`)
+        .maybeSingle();
+
+      if (session?.reference && session.reference !== reference) {
+        const { data: updatedPayment } = await supabaseAdmin
+          .from("payments")
+          .select("*")
+          .eq("reference", session.reference)
+          .maybeSingle();
+        if (updatedPayment) {
+          payment = updatedPayment;
+        }
+      }
+    }
+
     if (fetchPayErr) throw appError(500, fetchPayErr.message, "PAYMENT_FETCH_FAILED");
     if (!payment) throw appError(404, "Payment record not found", "PAYMENT_NOT_FOUND");
     if (payment.status === "completed") {
-      console.log(`[PAYMENT] Payment reference: ${reference} already processed`);
+      console.log(`[PAYMENT] Payment reference: ${payment.reference} already processed`);
       return { success: true, message: "Payment already processed" };
     }
 
