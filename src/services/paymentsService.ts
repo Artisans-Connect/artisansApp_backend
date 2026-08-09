@@ -482,5 +482,20 @@ export async function getCheckoutSession(sessionId: string) {
     session.status = "expired";
   }
 
-  return session;
+  // Look up the linked payment record to get the Paystack authorization_url
+  let authorization_url: string | null = null;
+  if (session.reference) {
+    const { data: payment } = await supabaseAdmin
+      .from("payments")
+      .select("paystack_payload")
+      .eq("reference", session.reference)
+      .maybeSingle();
+
+    if (payment?.paystack_payload) {
+      const payload = payment.paystack_payload as Record<string, any>;
+      authorization_url = payload.authorization_url || null;
+    }
+  }
+
+  return { ...session, authorization_url };
 }
