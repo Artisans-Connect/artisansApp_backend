@@ -39,8 +39,9 @@ export async function initializeTransaction(
     );
     return response.data?.data;
   } catch (err: any) {
+    const paystackMsg = err.response?.data?.message || err.message || "Paystack initialization failed";
     logger("Paystack Initialize Error:", err.response?.data || err.message);
-    throw err;
+    throw appError(err.response?.status || 500, `Paystack error: ${paystackMsg}`, "PAYSTACK_INIT_ERROR");
   }
 }
 
