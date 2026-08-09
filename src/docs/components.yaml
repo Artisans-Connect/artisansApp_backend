@@ -1,0 +1,51 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch API Components
+  version: 1.0.0
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    PortalAdminKey:
+      type: apiKey
+      in: header
+      name: x-verification-admin-key
+    IdempotencyKey:
+      type: apiKey
+      in: header
+      name: Idempotency-Key
+    PaystackSignature:
+      type: apiKey
+      in: header
+      name: x-paystack-signature
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data: {}
+    UuidPathParam:
+      type: string
+      format: uuid
+    JobMode:
+      type: string
+      enum: [asap, scheduled, flexible]
+    BudgetType:
+      type: string
+      enum: [fixed, range, negotiable]
+    ServiceType:
+      type: string
+      enum: [home_visit, remote, either]
+    NegotiationType:
+      type: string
+      enum: [quote, extra_charge, completion_adjustment]
+    PayoutChannel:
+      type: string
+      enum: [momo, bank]
+    DisputeResolutionType:
+      type: string
+      enum: [full_refund, full_payout, split]

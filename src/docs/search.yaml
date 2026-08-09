@@ -1,0 +1,48 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Search API
+  version: 1.0.0
+paths:
+  /api/search/parse-intent:
+    post:
+      summary: Parse natural language search query into category intent
+      tags: [Search]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+      responses:
+        '200':
+          description: Parsed search intent with matched categories
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      categories:
+                        type: array
+                        items:
+                          type: object
+                      refinedQuery:
+                        type: string
+                      intentSummary:
+                        type: string
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

@@ -1,0 +1,193 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Reports API
+  version: 1.0.0
+paths:
+  /api/reports:
+    post:
+      summary: Submit a user or safety report
+      tags: [Reports]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category, description]
+              properties:
+                reported_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                booking_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                chat_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                category:
+                  type: string
+                  enum:
+                    - HARASSMENT
+                    - SCAM_FRAUD
+                    - FAKE_IDENTITY
+                    - PAYMENT_OUTSIDE_APP
+                    - POOR_WORKMANSHIP
+                    - SAFETY_CONCERN
+                    - VIOLENCE_THREAT
+                    - PROPERTY_DAMAGE
+                    - NO_SHOW
+                    - UNPROFESSIONAL_BEHAVIOR
+                    - OTHER
+                description:
+                  type: string
+                  minLength: 10
+                  maxLength: 2000
+                attachments:
+                  type: array
+                  items:
+                    type: string
+                    format: uri
+                is_emergency:
+                  type: boolean
+                  default: false
+                client_metadata:
+                  type: object
+      responses:
+        '201':
+          description: Report submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/reports/my:
+    get:
+      summary: Get reports submitted by the current user
+      tags: [Reports]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User reports
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/reports/context/{bookingId}:
+    get:
+      summary: Get report context for a booking
+      tags: [Reports]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: bookingId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Booking report context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/reports/block:
+    post:
+      summary: Block another user
+      tags: [Reports]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blocked_id]
+              properties:
+                blocked_id:
+                  type: string
+                  format: uuid
+                reason:
+                  type: string
+                  maxLength: 500
+                  nullable: true
+      responses:
+        '201':
+          description: User blocked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/reports/block/{blockedId}:
+    delete:
+      summary: Unblock a user
+      tags: [Reports]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: blockedId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User unblocked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/reports/blocks:
+    get:
+      summary: List users blocked by the current user
+      tags: [Reports]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Block list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/reports/block-status/{targetUserId}:
+    get:
+      summary: Check block status between current user and target
+      tags: [Reports]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: targetUserId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Block status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}

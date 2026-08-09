@@ -1,0 +1,355 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Admin API
+  version: 1.0.0
+paths:
+  /api/admin/categories:
+    get:
+      summary: List all categories (admin)
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      responses:
+        '200':
+          description: Categories list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+    post:
+      summary: Create a category
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug]
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                icon_name:
+                  type: string
+                color_hex:
+                  type: string
+                description:
+                  type: string
+                sort_order:
+                  type: integer
+                is_active:
+                  type: boolean
+                base_fee:
+                  type: number
+      responses:
+        '201':
+          description: Category created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/categories/{id}:
+    patch:
+      summary: Update a category
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Category updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/categories/{id}/subcategories:
+    post:
+      summary: Create a subcategory under a category
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Subcategory created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/subcategories/{id}:
+    patch:
+      summary: Update a subcategory
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Subcategory updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/accounts:
+    get:
+      summary: Search and list user accounts
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: role
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Accounts list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/accounts/{id}:
+    get:
+      summary: Get account detail
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Account detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/accounts/{id}/suspend:
+    patch:
+      summary: Suspend a user account
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Account suspended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/accounts/{id}/reactivate:
+    patch:
+      summary: Reactivate a suspended account
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Account reactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/reports:
+    get:
+      summary: List reports for moderation
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: priority
+          schema:
+            type: string
+        - in: query
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: is_emergency
+          schema:
+            type: string
+        - in: query
+          name: q
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Reports list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/reports/{id}:
+    get:
+      summary: Get report detail for moderation
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Report detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+    patch:
+      summary: Update report moderation status
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                priority:
+                  type: string
+                action_taken:
+                  type: string
+                assigned_moderator_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                moderation_notes:
+                  type: string
+                  nullable: true
+                resolution_reason:
+                  type: string
+                  nullable: true
+                suspend_duration_days:
+                  type: integer
+                  nullable: true
+      responses:
+        '200':
+          description: Report updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/admin/reports/risk/{userId}:
+    get:
+      summary: Calculate repeat-offender risk for a user
+      tags: [Admin]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Risk assessment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+components:
+  securitySchemes:
+    PortalAdminKey:
+      type: apiKey
+      in: header
+      name: x-verification-admin-key
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}

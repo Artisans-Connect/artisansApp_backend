@@ -322,6 +322,7 @@ export async function verifyPayment(reference: string) {
         .select()
         .maybeSingle();
 
+      let isCompletionAdjustment = false;
       if (session) {
         const { data: neg } = await supabaseAdmin
           .from("negotiations")
@@ -331,6 +332,7 @@ export async function verifyPayment(reference: string) {
           .maybeSingle();
 
         if (neg?.type === "completion_adjustment") {
+          isCompletionAdjustment = true;
           await settlementService.processPayoutAndRelease(session.job_id, reference);
         }
       }
@@ -356,6 +358,10 @@ export async function verifyPayment(reference: string) {
           reference: reference,
         });
         return { success: true, message: "Payment recorded but job was cancelled; funds earmarked for refund." };
+      }
+
+      if (isCompletionAdjustment || job?.status === "completed" || job?.status === "pending_client_approval") {
+        return { success: true, message: "Completion payment verified and escrow released to worker." };
       }
 
       if (job) {

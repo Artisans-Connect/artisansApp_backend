@@ -1,0 +1,338 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Verification API
+  version: 1.0.0
+paths:
+  /api/verification/handoff:
+    post:
+      summary: Create a handoff code for portal verification
+      tags: [Verification]
+      security:
+        - BearerAuth: []
+      responses:
+        '201':
+          description: Handoff code created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/handoff/exchange:
+    post:
+      summary: Exchange a handoff code for verification context
+      tags: [Verification]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handoff_code]
+              properties:
+                handoff_code:
+                  type: string
+                  minLength: 16
+      responses:
+        '200':
+          description: Handoff exchanged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/me:
+    get:
+      summary: Get current user's verification status
+      tags: [Verification]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Verification context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/applications/search:
+    get:
+      summary: Search verification application by number or phone
+      tags: [Verification]
+      parameters:
+        - in: query
+          name: application_number
+          schema:
+            type: string
+        - in: query
+          name: phone_number
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Application found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/admin/applications:
+    get:
+      summary: List verification applications (portal admin)
+      tags: [Verification]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Applications list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/admin/applications/{id}:
+    get:
+      summary: Get verification application bundle (portal admin)
+      tags: [Verification]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Application bundle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/admin/audit-logs:
+    get:
+      summary: List verification audit logs (portal admin)
+      tags: [Verification]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Audit logs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/admin/applications/{id}/status:
+    patch:
+      summary: Update application status (portal admin)
+      tags: [Verification]
+      security:
+        - PortalAdminKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerificationStatusUpdate'
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/me/application:
+    post:
+      summary: Submit a verification application
+      tags: [Verification]
+      description: Optional Bearer token; handoff_code can link to mobile session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerificationApplication'
+      responses:
+        '201':
+          description: Application submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/me/application/documents:
+    post:
+      summary: Upload verification documents
+      tags: [Verification]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [verification_id, files]
+              properties:
+                handoff_code:
+                  type: string
+                  minLength: 16
+                verification_id:
+                  type: string
+                  format: uuid
+                files:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [document_type, file_name, content_base64]
+                    properties:
+                      document_type:
+                        type: string
+                        enum: [id_front, id_back, selfie, certification, training, portfolio]
+                      file_name:
+                        type: string
+                      mime_type:
+                        type: string
+                      size:
+                        type: integer
+                      content_base64:
+                        type: string
+      responses:
+        '201':
+          description: Documents uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/verification/applications/{id}/status:
+    patch:
+      summary: Update application status (authenticated user)
+      tags: [Verification]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerificationStatusUpdate'
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    PortalAdminKey:
+      type: apiKey
+      in: header
+      name: x-verification-admin-key
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}
+    VerificationApplication:
+      type: object
+      required: [full_name, phone_number, email, trade_category]
+      properties:
+        handoff_code:
+          type: string
+          minLength: 16
+        verification_level:
+          type: string
+          enum: [identity, professional, premium]
+          default: identity
+        full_name:
+          type: string
+        phone_number:
+          type: string
+        email:
+          type: string
+          format: email
+        date_of_birth:
+          type: string
+          nullable: true
+        gender:
+          type: string
+        trade_category:
+          type: string
+        years_of_experience:
+          type: integer
+        business_name:
+          type: string
+        current_region:
+          type: string
+        current_city:
+          type: string
+        confidence_score:
+          type: integer
+        fraud_indicators:
+          type: array
+          items:
+            type: string
+        references:
+          type: array
+          items:
+            type: object
+            properties:
+              reference_name:
+                type: string
+              phone_number:
+                type: string
+              relationship:
+                type: string
+    VerificationStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [under_review, approved, rejected, more_info_requested]
+        verification_level:
+          type: string
+          enum: [identity, professional, premium]
+        rejection_reason:
+          type: string
+        admin_notes:
+          type: string
+        more_info_message:
+          type: string
+        adopt_trade:
+          type: boolean
+        adopt_category_id:
+          type: string
+          format: uuid
+          nullable: true
+        assigned_trade:
+          type: string
+          nullable: true

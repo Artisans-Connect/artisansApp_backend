@@ -1,0 +1,178 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Negotiations API
+  version: 1.0.0
+paths:
+  /api/negotiations:
+    post:
+      summary: Create a new price negotiation
+      tags: [Negotiations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema:
+            type: string
+          required: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId, type, initialAmount]
+              properties:
+                jobId:
+                  type: string
+                  format: uuid
+                applicationId:
+                  type: string
+                  format: uuid
+                type:
+                  type: string
+                  enum: [quote, extra_charge, completion_adjustment]
+                initialAmount:
+                  type: number
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Negotiation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/negotiations/job/{jobId}:
+    get:
+      summary: Get active negotiations for a job
+      tags: [Negotiations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Active negotiations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/negotiations/{id}:
+    get:
+      summary: Get negotiation state by ID
+      tags: [Negotiations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Negotiation state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/negotiations/{id}/propose:
+    post:
+      summary: Propose a counter amount
+      tags: [Negotiations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount:
+                  type: number
+                note:
+                  type: string
+      responses:
+        '200':
+          description: Counter proposed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/negotiations/{id}/accept:
+    post:
+      summary: Accept the current proposal
+      tags: [Negotiations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Proposal accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/negotiations/{id}/reject:
+    post:
+      summary: Reject or cancel a negotiation
+      tags: [Negotiations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Negotiation rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}

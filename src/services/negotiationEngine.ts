@@ -115,6 +115,20 @@ export async function createNegotiation(params: CreateNegotiationParams) {
     }
   }
 
+  // Check if an open negotiation of the same type already exists for this job to prevent duplicate open sessions
+  const { data: existingOpen, error: openCheckError } = await supabaseAdmin
+    .from("negotiations")
+    .select("id")
+    .eq("job_id", jobId)
+    .eq("type", type)
+    .eq("status", "open")
+    .maybeSingle();
+
+  if (openCheckError) throw appError(500, openCheckError.message, "OPEN_NEGOTIATION_CHECK_FAILED");
+  if (existingOpen) {
+    return getNegotiationState(existingOpen.id);
+  }
+
   // 2. Create the negotiation session
   const { data: negotiation, error: insertError } = await supabaseAdmin
     .from("negotiations")
@@ -313,6 +327,17 @@ export async function acceptCurrentProposal(negotiationId: string, acceptorId: s
   if (updateError) throw appError(500, updateError.message, "NEGOTIATION_ACCEPT_FAILED");
 
   await logEvent(neg.job_id, acceptorId, "negotiation_accepted", agreedAmount, { type: neg.type });
+
+  if (neg.type === 'extra_charge') {
+    // Expire any other remaining open extra charge negotiations for this job to clean up stale duplicates
+    await supabaseAdmin
+      .from("negotiations")
+      .update({ status: "expired", updated_at: now })
+      .eq("job_id", neg.job_id)
+      .eq("type", "extra_charge")
+      .eq("status", "open")
+      .neq("id", negotiationId);
+  }
 
   // Perform post-acceptance callbacks depending on the type
   if (neg.type === 'quote') {

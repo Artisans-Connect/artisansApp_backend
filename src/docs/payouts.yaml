@@ -1,12 +1,12 @@
 openapi: 3.0.0
 info:
-  title: CraftMatch Reviews API
+  title: CraftMatch Payouts API
   version: 1.0.0
 paths:
-  /api/reviews:
+  /api/payouts/request:
     post:
-      summary: Create a review for a completed job
-      tags: [Reviews]
+      summary: Request a payout to MoMo or bank account
+      tags: [Payouts]
       security:
         - BearerAuth: []
       requestBody:
@@ -15,42 +15,47 @@ paths:
           application/json:
             schema:
               type: object
-              required: [job_id, worker_id, rating]
+              required: [amount, channel, accountNumber, accountName]
               properties:
-                job_id:
+                amount:
+                  type: number
+                channel:
                   type: string
-                  format: uuid
-                worker_id:
+                  enum: [momo, bank]
+                accountNumber:
                   type: string
-                  format: uuid
-                rating:
-                  type: integer
-                  minimum: 1
-                  maximum: 5
-                comment:
+                accountName:
                   type: string
-                  maxLength: 500
+                bankCode:
+                  type: string
+                  default: MTN
       responses:
-        '201':
-          description: Review created
+        '200':
+          description: Payout requested
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessEnvelope'
-  /api/reviews/worker/{workerId}:
+  /api/payouts/history:
     get:
-      summary: Get reviews and rating summary for a worker
-      tags: [Reviews]
+      summary: Get payout request history
+      tags: [Payouts]
+      security:
+        - BearerAuth: []
       parameters:
-        - in: path
-          name: workerId
-          required: true
+        - in: query
+          name: limit
           schema:
-            type: string
-            format: uuid
+            type: integer
+            default: 50
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
       responses:
         '200':
-          description: Worker reviews
+          description: Payout history
           content:
             application/json:
               schema:

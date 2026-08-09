@@ -1,49 +1,24 @@
 openapi: 3.0.0
 info:
-  title: Artisans Workers API
+  title: CraftMatch Workers API
   version: 1.0.0
 paths:
-  /api/workers/location:
-    put:
-      summary: Update worker's current real-time coordinates
-      tags:
-        - Workers
+  /api/workers/availability:
+    get:
+      summary: Get worker availability status
+      tags: [Workers]
       security:
         - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - lat
-                - lng
-              properties:
-                lat:
-                  type: number
-                  example: 6.6731
-                lng:
-                  type: number
-                  example: -1.5654
       responses:
-        200:
-          description: Location updated successfully
+        '200':
+          description: Availability status
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-  /api/workers/availability:
+                $ref: '#/components/schemas/SuccessEnvelope'
     put:
-      summary: Toggle worker online/offline availability status
-      tags:
-        - Workers
+      summary: Toggle worker online/offline availability
+      tags: [Workers]
       security:
         - BearerAuth: []
       requestBody:
@@ -52,80 +27,83 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - is_available
+              required: [is_available]
               properties:
                 is_available:
                   type: boolean
-                  example: true
       responses:
-        200:
-          description: Availability status updated successfully
+        '200':
+          description: Availability updated
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/location:
+    put:
+      summary: Update worker's current real-time coordinates
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_lat, current_lng]
+              properties:
+                current_lat:
+                  type: number
+                current_lng:
+                  type: number
+      responses:
+        '200':
+          description: Location updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
   /api/workers/nearby:
     get:
-      summary: Find workers near a specific location
-      tags:
-        - Workers
+      summary: Find workers near a location
+      tags: [Workers]
       security:
         - BearerAuth: []
       parameters:
         - in: query
           name: lat
-          required: true
           schema:
             type: number
-          description: Latitude of target location
-          example: 6.6731
         - in: query
           name: lng
-          required: true
           schema:
             type: number
-          description: Longitude of target location
-          example: -1.5654
         - in: query
           name: radius_km
           schema:
             type: number
-            default: 10
-          description: Maximum search radius in kilometers
-          example: 5
+            default: 5
         - in: query
           name: category_id
           schema:
             type: string
-          description: Optionally filter by specific service category ID
-          example: "cat_123"
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+            maximum: 50
       responses:
-        200:
-          description: Nearby workers list
+        '200':
+          description: Nearby workers
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      type: object
+                $ref: '#/components/schemas/SuccessEnvelope'
   /api/workers/accept/{jobId}:
     post:
-      summary: Accept an assigned job request
-      tags:
-        - Workers
+      summary: Accept or apply to a job request
+      tags: [Workers]
       security:
         - BearerAuth: []
       parameters:
@@ -133,27 +111,29 @@ paths:
           name: jobId
           required: true
           schema:
-            type: integer
-          description: The Job ID
-          example: 45
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                proposed_rate:
+                  type: number
       responses:
-        200:
-          description: Job accepted successfully
+        '200':
+          description: Job accepted or application submitted
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
+                $ref: '#/components/schemas/SuccessEnvelope'
   /api/workers/decline/{jobId}:
     post:
       summary: Decline an assigned job request
-      tags:
-        - Workers
+      tags: [Workers]
       security:
         - BearerAuth: []
       parameters:
@@ -161,232 +141,335 @@ paths:
           name: jobId
           required: true
           schema:
-            type: integer
-          description: The Job ID
-          example: 45
+            type: string
+            format: uuid
       responses:
-        200:
-          description: Job request declined
+        '200':
+          description: Job declined
           content:
             application/json:
               schema:
                 type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
   /api/workers/me/profile:
     put:
-      summary: Update worker-specific details (categories, description, rates)
-      tags:
-        - Workers
+      summary: Update worker-specific profile details
+      tags: [Workers]
       security:
         - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                skills:
+                  type: array
+                  items:
+                    type: string
+                hourly_rate:
+                  type: number
+                rate_type:
+                  type: string
+                  enum: [hourly, fixed]
+                service_areas:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Worker profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/me/active-job:
+    get:
+      summary: Fetch the worker's current active job
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Active job or null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/me/stats:
+    get:
+      summary: Fetch worker performance stats
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Worker stats and recent reviews
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/me/job-requests:
+    get:
+      summary: Get active job requests dispatched to this worker
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Pending job requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/me/job-requests/{jobId}:
+    get:
+      summary: Get a specific job request by ID
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job request details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/me/applications:
+    get:
+      summary: List worker's job applications
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Worker applications
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/applications/{jobId}/withdraw:
+    post:
+      summary: Withdraw a job application
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Application withdrawn
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/workers/applications/{applicationId}/accept-counter:
+    post:
+      summary: Accept a client's counter offer on an application
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: applicationId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Counter offer accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/me/history:
+    get:
+      summary: Get worker's completed or cancelled job history
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+        - in: query
+          name: offset
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Job history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/me/earnings:
+    get:
+      summary: Get worker earnings summary
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Earnings data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/me/demo-verify:
+    put:
+      summary: Demo shortcut to verify worker (development only)
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Worker verified for demo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/{jobId}/on-way:
+    post:
+      summary: Mark an accepted job as on the way
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Status updated to on_the_way
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/{jobId}/arrive:
+    post:
+      summary: Mark a job as arrived at location
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Status updated to arrived
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/{jobId}/start:
+    post:
+      summary: Mark an arrived job as in progress
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Status updated to in_progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/{jobId}/cancel:
+    post:
+      summary: Worker cancels an assigned job
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Job cancelled by worker
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/workers/{jobId}/respond-termination:
+    post:
+      summary: Respond to a client termination request
+      tags: [Workers]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [accept]
               properties:
-                bio:
-                  type: string
-                  example: "Experienced residential plumber with 5+ years experience."
-                skills:
-                  type: array
-                  items:
-                    type: string
-                  example: ["piping", "leak detection", "water heater repair"]
-                base_rate:
-                  type: number
-                  example: 50.00
+                accept:
+                  type: boolean
       responses:
-        200:
-          description: Worker profile updated successfully
+        '200':
+          description: Termination response recorded
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-  /api/workers/me/active-job:
-    get:
-      summary: Fetch the worker's current active job
-      tags:
-        - Workers
-      security:
-        - BearerAuth: []
-      responses:
-        200:
-          description: Active job details or null if none
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    nullable: true
-  /api/workers/me/stats:
-    get:
-      summary: Fetch live worker performance stats
-      tags:
-        - Workers
-      security:
-        - BearerAuth: []
-      responses:
-        200:
-          description: Worker stats and recent reviews
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    properties:
-                      total_jobs:
-                        type: integer
-                        example: 12
-                      rating:
-                        type: number
-                        example: 4.8
-                      review_count:
-                        type: integer
-                        example: 6
-                      response_hours_label:
-                        type: string
-                        example: "18 min"
-                      response_minutes_average:
-                        type: number
-                        nullable: true
-                        example: 18.4
-                      response_sample_count:
-                        type: integer
-                        example: 7
-                      recent_reviews:
-                        type: array
-                        items:
-                          type: object
-  /api/workers/me/job-requests:
-    get:
-      summary: Get list of active job requests dispatched to this worker
-      tags:
-        - Workers
-      security:
-        - BearerAuth: []
-      responses:
-        200:
-          description: List of pending job applications/invitations
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      type: object
-  /api/workers/me/history:
-    get:
-      summary: Get the worker's history of completed or cancelled jobs
-      tags:
-        - Workers
-      security:
-        - BearerAuth: []
-      responses:
-        200:
-          description: Worker's past jobs list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      type: object
-  /api/workers/{jobId}/start:
-    post:
-      summary: Mark an arrived job as started/in-progress
-      tags:
-        - Workers
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: jobId
-          required: true
-          schema:
-            type: integer
-          description: The Job ID
-          example: 45
-      responses:
-        200:
-          description: Job status updated to in_progress
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-  /api/workers/{jobId}/on-way:
-    post:
-      summary: Mark an accepted job as on the way
-      tags:
-        - Workers
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: jobId
-          required: true
-          schema:
-            type: string
-          description: The Job UUID
-      responses:
-        200:
-          description: Job status updated to on_the_way
-  /api/workers/{jobId}/arrive:
-    post:
-      summary: Mark an accepted/on-the-way job as arrived
-      tags:
-        - Workers
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: jobId
-          required: true
-          schema:
-            type: string
-          description: The Job UUID
-      responses:
-        200:
-          description: Job status updated to arrived
+                $ref: '#/components/schemas/SuccessEnvelope'
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}

@@ -1,0 +1,109 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Disputes API
+  version: 1.0.0
+paths:
+  /api/disputes/create:
+    post:
+      summary: Create a dispute for a job
+      tags: [Disputes]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId, reason]
+              properties:
+                jobId:
+                  type: string
+                  format: uuid
+                reason:
+                  type: string
+                evidencePhotos:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Dispute created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/disputes/admin/list:
+    get:
+      summary: List disputes (admin)
+      tags: [Disputes]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Disputes list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/disputes/admin/resolve:
+    post:
+      summary: Resolve a dispute (admin)
+      tags: [Disputes]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disputeId, resolutionType]
+              properties:
+                disputeId:
+                  type: string
+                  format: uuid
+                resolutionType:
+                  type: string
+                  enum: [full_refund, full_payout, split]
+                clientAmount:
+                  type: number
+                workerAmount:
+                  type: number
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Dispute resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}

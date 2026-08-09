@@ -6,8 +6,7 @@ paths:
   /api/jobs/mine:
     get:
       summary: Retrieve jobs created by or assigned to the current user
-      tags:
-        - Jobs
+      tags: [Jobs]
       security:
         - BearerAuth: []
       parameters:
@@ -15,28 +14,41 @@ paths:
           name: status
           schema:
             type: string
-          description: Comma-separated list of job statuses to filter by (e.g. pending,accepted,completed,cancelled)
-          example: "pending,accepted"
+          description: Comma-separated job statuses (e.g. pending,accepted,completed,cancelled)
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
       responses:
-        200:
+        '200':
           description: A list of jobs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      type: object
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/mine/counts:
+    get:
+      summary: Get job counts grouped by status for the current user
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Job status counts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
   /api/jobs/create:
     post:
       summary: Create a new job request
-      tags:
-        - Jobs
+      tags: [Jobs]
       security:
         - BearerAuth: []
       parameters:
@@ -65,71 +77,51 @@ paths:
               properties:
                 category_id:
                   type: string
-                  example: "cat_123"
                 title:
                   type: string
                   maxLength: 80
-                  example: "Fix leaking kitchen pipe"
                 description:
                   type: string
-                  example: "The pipe under the kitchen sink is leaking heavily and needs urgent repair."
                 photo_urls:
                   type: array
                   items:
                     type: string
-                  example: ["https://example.com/photo1.jpg"]
+                    format: uri
                 location_lat:
                   type: number
-                  example: 6.6731
                 location_lng:
                   type: number
-                  example: -1.5654
                 address_label:
                   type: string
-                  example: "KNUST campus, Kumasi"
                 job_mode:
-                  type: string
-                  enum: [ASAP, SCHEDULED]
-                  example: "ASAP"
+                  $ref: '#/components/schemas/JobMode'
                 budget_type:
-                  type: string
-                  enum: [FIXED, RANGE]
-                  example: "FIXED"
+                  $ref: '#/components/schemas/BudgetType'
                 budget_fixed:
                   type: number
-                  example: 150.00
                 budget_min:
                   type: number
-                  example: 100.00
                 budget_max:
                   type: number
-                  example: 200.00
                 scheduled_for:
                   type: string
                   format: date-time
-                  example: "2026-06-04T10:00:00Z"
                 service_type:
+                  $ref: '#/components/schemas/ServiceType'
+                requested_worker_id:
                   type: string
-                  enum: [ON_SITE, REMOTE]
-                  example: "ON_SITE"
+                  format: uuid
       responses:
-        201:
+        '201':
           description: Job created successfully
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
+                $ref: '#/components/schemas/SuccessEnvelope'
   /api/jobs/{id}:
     get:
       summary: Get details of a specific job
-      tags:
-        - Jobs
+      tags: [Jobs]
       security:
         - BearerAuth: []
       parameters:
@@ -137,27 +129,134 @@ paths:
           name: id
           required: true
           schema:
-            type: integer
-          description: The Job ID
-          example: 45
+            $ref: '#/components/schemas/UuidPathParam'
       responses:
-        200:
+        '200':
           description: Job details
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/applications:
+    get:
+      summary: List worker applications for a job
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      responses:
+        '200':
+          description: Job applications
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/applications/{applicationId}/accept:
+    post:
+      summary: Accept a worker application for a job
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+        - in: path
+          name: applicationId
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      responses:
+        '200':
+          description: Application accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/applications/{applicationId}/counter:
+    post:
+      summary: Counter a worker's proposed rate
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+        - in: path
+          name: applicationId
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [counterRate]
+              properties:
+                counterRate:
+                  type: number
+                  minimum: 0
+      responses:
+        '200':
+          description: Counter offer sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/matching-progress:
+    get:
+      summary: Get worker matching progress for a job
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      responses:
+        '200':
+          description: Matching progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/cancellation-preview:
+    get:
+      summary: Preview cancellation fees and policy for a job
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      responses:
+        '200':
+          description: Cancellation preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
   /api/jobs/{id}/cancel:
     post:
       summary: Cancel a job
-      tags:
-        - Jobs
+      tags: [Jobs]
       security:
         - BearerAuth: []
       parameters:
@@ -165,27 +264,91 @@ paths:
           name: id
           required: true
           schema:
-            type: integer
-          description: The Job ID to cancel
-          example: 45
+            $ref: '#/components/schemas/UuidPathParam'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
       responses:
-        200:
-          description: Job cancelled successfully
+        '200':
+          description: Job cancelled
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/request-termination:
+    post:
+      summary: Request early termination of an in-progress job
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Termination requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/request-another-worker:
+    post:
+      summary: Request a new worker after a declined or cancelled match
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      responses:
+        '200':
+          description: New worker search initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/confirm-work-done:
+    post:
+      summary: Client confirms work is done (worker completion flow)
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      responses:
+        '200':
+          description: Work confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
   /api/jobs/{id}/complete:
     post:
-      summary: Complete a job
-      tags:
-        - Jobs
+      summary: Worker submits job completion details
+      tags: [Jobs]
       security:
         - BearerAuth: []
       parameters:
@@ -193,25 +356,101 @@ paths:
           name: id
           required: true
           schema:
-            type: integer
-          description: The Job ID to mark as completed
-          example: 45
+            $ref: '#/components/schemas/UuidPathParam'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                proposed_amount:
+                  type: number
+                hours_spent:
+                  type: number
+                materials_used:
+                  type: string
+                notes:
+                  type: string
+                photo_urls:
+                  type: array
+                  items:
+                    type: string
+                    format: uri
       responses:
-        200:
-          description: Job completed successfully
+        '200':
+          description: Job completion submitted
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/approve-completion:
+    post:
+      summary: Client approves worker completion submission
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      responses:
+        '200':
+          description: Completion approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/jobs/{id}/reopen:
+    post:
+      summary: Reopen a completed or cancelled job
+      tags: [Jobs]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: '#/components/schemas/UuidPathParam'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type: string
+      responses:
+        '200':
+          description: Job reopened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}
+    UuidPathParam:
+      type: string
+      format: uuid
+    JobMode:
+      type: string
+      enum: [asap, scheduled, flexible]
+    BudgetType:
+      type: string
+      enum: [fixed, range, negotiable]
+    ServiceType:
+      type: string
+      enum: [home_visit, remote, either]

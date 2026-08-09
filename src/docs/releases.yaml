@@ -1,0 +1,50 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Releases API
+  version: 1.0.0
+paths:
+  /api/releases/app:
+    get:
+      summary: Get app download manifest with platform links
+      tags: [Releases]
+      description: Returns download links for Android, iOS, Windows, macOS, and web. URLs are driven by environment variables or an optional manifest file.
+      responses:
+        '200':
+          description: App release manifest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      appName:
+                        type: string
+                      latestVersion:
+                        type: string
+                      updatedAt:
+                        type: string
+                        format: date-time
+                      links:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            platform:
+                              type: string
+                              enum: [android, ios, windows, macos, web]
+                            label:
+                              type: string
+                            href:
+                              type: string
+                            version:
+                              type: string
+                            minRequirement:
+                              type: string
+                            available:
+                              type: boolean
+                            external:
+                              type: boolean

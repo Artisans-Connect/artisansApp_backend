@@ -1,0 +1,338 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Payments API
+  version: 1.0.0
+paths:
+  /api/payments/initialize:
+    post:
+      summary: Initialize Paystack checkout for a job deposit
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema:
+            type: string
+          required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId]
+              properties:
+                jobId:
+                  type: string
+                  format: uuid
+                applicationId:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Payment initialization data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/verify/{reference}:
+    get:
+      summary: Verify a payment by transaction reference
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: reference
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/callback:
+    get:
+      summary: Paystack redirect callback landing page
+      tags: [Payments]
+      parameters:
+        - in: query
+          name: reference
+          schema:
+            type: string
+      responses:
+        '200':
+          description: HTML success page
+          content:
+            text/html:
+              schema:
+                type: string
+  /api/payments/webhook:
+    post:
+      summary: Paystack webhook receiver
+      tags: [Payments]
+      security:
+        - PaystackSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Webhook acknowledged
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/payments/payout-details:
+    post:
+      summary: Save worker MoMo payout details
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [network, accountNumber, accountName]
+              properties:
+                network:
+                  type: string
+                accountNumber:
+                  type: string
+                accountName:
+                  type: string
+      responses:
+        '200':
+          description: Payout details saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+    get:
+      summary: Get worker payout details
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Payout details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/extra-charge/propose:
+    post:
+      summary: Propose an extra charge on a job
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId, amount, description, proposedBy]
+              properties:
+                jobId:
+                  type: string
+                  format: uuid
+                amount:
+                  type: number
+                description:
+                  type: string
+                proposedBy:
+                  type: string
+                  enum: [worker, client]
+      responses:
+        '200':
+          description: Extra charge proposed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/extra-charge/accept:
+    post:
+      summary: Accept a proposed extra charge
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [extraChargeId]
+              properties:
+                extraChargeId:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Extra charge accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/extra-charge/initialize:
+    post:
+      summary: Initialize payment for an accepted extra charge
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [extraChargeId]
+              properties:
+                extraChargeId:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Extra charge checkout initialized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/extra-charge/counter:
+    post:
+      summary: Counter a proposed extra charge amount
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [extraChargeId, amount]
+              properties:
+                extraChargeId:
+                  type: string
+                  format: uuid
+                amount:
+                  type: number
+                  minimum: 0
+      responses:
+        '200':
+          description: Extra charge countered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/checkout-session/{id}:
+    get:
+      summary: Get checkout session details (public)
+      tags: [Payments]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Checkout session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/sandbox/callback:
+    post:
+      summary: Simulate payment callback in sandbox mode
+      tags: [Payments]
+      description: Requires USE_SANDBOX_PAYMENTS=true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reference]
+              properties:
+                reference:
+                  type: string
+      responses:
+        '200':
+          description: Sandbox payment verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/settlement/{jobId}:
+    get:
+      summary: Calculate settlement for a completed job
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Settlement calculation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/payments/settlement/{jobId}/checkout:
+    post:
+      summary: Initialize checkout for outstanding settlement balance
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema:
+            type: string
+          required: true
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Settlement checkout or direct release
+          content:
+            application/json:
+              schema:
+                type: object
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    PaystackSignature:
+      type: apiKey
+      in: header
+      name: x-paystack-signature
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}

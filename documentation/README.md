@@ -32,10 +32,21 @@ graph TD
 * **`POST /api/auth/login`**: Authenticate and return user session claims.
 * **`GET /api/users/profile`**: Retrieve personal profile data.
 
-### 💼 Jobs Lifecycle
+### 💼 Jobs Lifecycle & Bargaining
 * **`POST /api/jobs/create`**: Client initiates a job request (mode: `asap` / `scheduled` / `flexible`).
 * **`GET /api/jobs/active`**: Retrieve ongoing jobs associated with the user.
 * **`POST /api/jobs/:id/status`**: Transition a job through states (`searching` → `matching` → `arrived` → `in_progress` → `completed`).
+* **`POST /api/negotiations`**: Initiate a price negotiation or extra charge proposal.
+* **`POST /api/negotiations/:id/propose`**: Propose a counter-offer in an active bargaining session.
+* **`POST /api/negotiations/:id/accept`**: Accept an open price offer or extra charge proposal.
+
+### 💰 Payments, Escrow & Wallets
+* **`POST /api/payments/initialize`**: Initialize an escrow deposit or extra charge payment checkout session.
+* **`GET /api/payments/verify/:reference`**: Verify checkout transaction and process escrow ledger updates.
+* **`GET /api/settlement/job/:jobId`**: Retrieve itemized gross settlement breakdown (initial quote, extra charges, platform fee, payout).
+* **`POST /api/settlement/checkout`**: Release held escrow funds to the worker's wallet upon completion sign-off.
+* **`GET /api/wallets/me`**: Retrieve user wallet balance and historical credit/debit transaction ledger.
+* **`POST /api/disputes`**: File a formal job dispute with evidence photos for admin resolution.
 
 ### 🛠️ Artisan Dispatching
 * **`GET /api/workers/nearby`**: Query active workers within a geospatial radius.

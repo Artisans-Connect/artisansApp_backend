@@ -1,0 +1,56 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Trades API
+  version: 1.0.0
+paths:
+  /api/trades:
+    get:
+      summary: List active trade subcategories with icons
+      tags: [Trades]
+      responses:
+        '200':
+          description: Active trades list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/trades/resolve:
+    post:
+      summary: Resolve a natural language query to a trade name
+      tags: [Trades]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+      responses:
+        '200':
+          description: Resolved trade match
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      matched:
+                        type: boolean
+                      resolved_trade:
+                        type: string
+                        nullable: true
+components:
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}

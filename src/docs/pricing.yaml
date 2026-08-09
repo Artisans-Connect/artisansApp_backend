@@ -1,0 +1,58 @@
+openapi: 3.0.0
+info:
+  title: CraftMatch Pricing API
+  version: 1.0.0
+paths:
+  /api/pricing/estimate:
+    post:
+      summary: Estimate service fee for a job
+      tags: [Pricing]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category_id, location_lat, location_lng, job_mode]
+              properties:
+                category_id:
+                  type: string
+                subcategory_id:
+                  type: string
+                  nullable: true
+                subcategoryId:
+                  type: string
+                  nullable: true
+                location_lat:
+                  type: number
+                  minimum: -90
+                  maximum: 90
+                location_lng:
+                  type: number
+                  minimum: -180
+                  maximum: 180
+                job_mode:
+                  type: string
+                  enum: [asap, scheduled, flexible]
+      responses:
+        '200':
+          description: Fee estimate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}

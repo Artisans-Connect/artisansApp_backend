@@ -558,10 +558,12 @@ export async function cancelJob(userId: string, jobId: string, body: unknown) {
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)
+    .eq("status", job.status)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) throw appError(500, error.message, "JOB_CANCEL_FAILED");
+  if (!data) throw appError(409, "Job status was modified concurrently. Please refresh.", "CONCURRENT_STATUS_CHANGE");
 
   // Record in ledger
   await recordCancellation(
@@ -726,10 +728,12 @@ export async function requestTermination(userId: string, jobId: string, body: un
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)
+    .eq("status", job.status)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) throw appError(500, error.message, "TERMINATION_REQUEST_FAILED");
+  if (!data) throw appError(409, "Job status was modified concurrently. Please refresh.", "CONCURRENT_STATUS_CHANGE");
 
   if (job.worker_id) {
     await notifyService.notifyTerminationRequested(
@@ -971,10 +975,12 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)
+    .in("status", [JOB_STATUS.IN_PROGRESS, JOB_STATUS.PENDING_CLIENT_APPROVAL])
     .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
-    .single();
+    .maybeSingle();
 
   if (error) throw appError(500, error.message, "JOB_COMPLETE_FAILED");
+  if (!data) throw appError(409, "Job status was modified concurrently. Please refresh.", "CONCURRENT_STATUS_CHANGE");
 
   matchingService.clearDispatchState(jobId);
   await notifyService.notifyCompletionSubmitted(job.client_id, jobId);

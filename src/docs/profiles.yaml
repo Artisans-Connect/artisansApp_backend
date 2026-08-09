@@ -6,8 +6,7 @@ paths:
   /api/profiles:
     post:
       summary: Create a user profile
-      tags:
-        - Profiles
+      tags: [Profiles]
       security:
         - BearerAuth: []
       requestBody:
@@ -16,74 +15,63 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - full_name
-                - phone
+              required: [full_name, phone, signup_type]
               properties:
                 full_name:
                   type: string
-                  example: "John Doe"
+                  maxLength: 100
                 phone:
                   type: string
-                  example: "+233240000000"
+                signup_type:
+                  type: string
+                  enum: [client, worker]
                 avatar_url:
                   type: string
-                  example: "https://example.com/avatar.jpg"
+                  format: uri
+                skills:
+                  type: array
+                  items:
+                    type: string
+                hourly_rate:
+                  type: number
+                rate_type:
+                  type: string
+                  enum: [hourly, fixed]
+                  default: hourly
+                service_areas:
+                  type: array
+                  items:
+                    type: string
+                bio:
+                  type: string
+                  maxLength: 500
+                location_label:
+                  type: string
+                experience_band:
+                  type: string
       responses:
-        201:
-          description: Profile created successfully
+        '201':
+          description: Profile created
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    properties:
-                      id:
-                        type: string
-                      full_name:
-                        type: string
-                      phone:
-                        type: string
-                      avatar_url:
-                        type: string
+                $ref: '#/components/schemas/SuccessEnvelope'
   /api/profiles/me:
     get:
       summary: Get current user's profile
-      tags:
-        - Profiles
+      tags: [Profiles]
       security:
         - BearerAuth: []
       responses:
-        200:
-          description: Profile details retrieved
+        '200':
+          description: Profile details
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    properties:
-                      id:
-                        type: string
-                      full_name:
-                        type: string
-                      phone:
-                        type: string
-                      avatar_url:
-                        type: string
+                $ref: '#/components/schemas/SuccessEnvelope'
     put:
       summary: Update current user's profile
-      tags:
-        - Profiles
+      tags: [Profiles]
       security:
         - BearerAuth: []
       requestBody:
@@ -95,28 +83,39 @@ paths:
               properties:
                 full_name:
                   type: string
-                  example: "John Doe Updated"
+                phone:
+                  type: string
                 avatar_url:
                   type: string
-                  example: "https://example.com/new-avatar.jpg"
+                  format: uri
+                  nullable: true
+                bio:
+                  type: string
+                location_label:
+                  type: string
       responses:
-        200:
-          description: Profile updated successfully
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+    delete:
+      summary: Delete current user's account
+      tags: [Profiles]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Account deleted
           content:
             application/json:
               schema:
                 type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-  /api/profiles/me/fcm-token:
-    put:
-      summary: Update worker or client FCM token for push notifications
-      tags:
-        - Profiles
+  /api/profiles/me/mode:
+    patch:
+      summary: Switch active mode between client and worker
+      tags: [Profiles]
       security:
         - BearerAuth: []
       requestBody:
@@ -125,29 +124,204 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - fcm_token
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [client, worker]
+      responses:
+        '200':
+          description: Mode updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/profiles/me/worker:
+    post:
+      summary: Onboard as a worker on an existing client profile
+      tags: [Profiles]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [skills, service_areas]
+              properties:
+                skills:
+                  type: array
+                  items:
+                    type: string
+                service_areas:
+                  type: array
+                  items:
+                    type: string
+                experience_band:
+                  type: string
+                bio:
+                  type: string
+                avatar_url:
+                  type: string
+                  format: uri
+                location_label:
+                  type: string
+      responses:
+        '201':
+          description: Worker onboarded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/profiles/me/fcm-token:
+    put:
+      summary: Update FCM token for push notifications
+      tags: [Profiles]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fcm_token]
               properties:
                 fcm_token:
                   type: string
-                  example: "dG9rZW5fZXhhbXBsZQ=="
       responses:
-        200:
-          description: FCM token updated successfully
+        '200':
+          description: FCM token updated
           content:
             application/json:
               schema:
                 type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  message:
-                    type: string
-                    example: "FCM token updated"
+  /api/profiles/me/notification-devices:
+    post:
+      summary: Register a notification device
+      tags: [Profiles]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fcm_token]
+              properties:
+                fcm_token:
+                  type: string
+                platform:
+                  type: string
+                  default: unknown
+                app_version:
+                  type: string
+      responses:
+        '200':
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/profiles/me/notification-devices/{tokenHash}:
+    delete:
+      summary: Revoke a registered notification device
+      tags: [Profiles]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: tokenHash
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Device revoked
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/profiles/me/gallery:
+    post:
+      summary: Add a photo to worker gallery
+      tags: [Profiles]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+      responses:
+        '200':
+          description: Gallery updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/profiles/me/gallery/delete:
+    post:
+      summary: Remove a photo from worker gallery
+      tags: [Profiles]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+      responses:
+        '200':
+          description: Gallery updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/profiles/{id}:
+    get:
+      summary: Get a profile by user ID
+      tags: [Profiles]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Profile details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}

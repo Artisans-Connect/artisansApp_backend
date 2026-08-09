@@ -28,6 +28,19 @@ export async function calculateSettlement(jobId: string) {
   const distanceCost = details ? Number(details.distance_cost || 0) : 0;
   const urgencyPremium = details ? Number(details.urgency_premium || 0) : 0;
 
+  let initialEscrow = baseRate + distanceCost + urgencyPremium;
+  if (initialEscrow <= 0) {
+    const { data: acceptedApp } = await supabaseAdmin
+      .from("job_applications")
+      .select("total_quote")
+      .eq("job_id", jobId)
+      .eq("status", "accepted")
+      .maybeSingle();
+    if (acceptedApp?.total_quote) {
+      initialEscrow = Number(acceptedApp.total_quote);
+    }
+  }
+
   // 2. Fetch escrow held amount
   const { data: escrow } = await supabaseAdmin
     .from("job_escrow_balances")
@@ -35,8 +48,17 @@ export async function calculateSettlement(jobId: string) {
     .eq("job_id", jobId)
     .maybeSingle();
 
-  const escrowHeld = escrow ? Number(escrow.held_amount || 0) : 0;
-  const initialEscrow = baseRate + distanceCost + urgencyPremium;
+  let escrowHeld = escrow ? Number(escrow.held_amount || 0) : 0;
+  if (escrowHeld <= 0) {
+    const { data: ledgerDeposits } = await supabaseAdmin
+      .from("escrow_ledger")
+      .select("amount")
+      .eq("job_id", jobId)
+      .eq("entry_type", "deposit");
+    if (ledgerDeposits && ledgerDeposits.length > 0) {
+      escrowHeld = ledgerDeposits.reduce((sum, d) => sum + Number(d.amount || 0), 0);
+    }
+  }
 
   // 3. Fetch accepted extra charges with descriptions
   const { data: extraCharges } = await supabaseAdmin
@@ -46,10 +68,25 @@ export async function calculateSettlement(jobId: string) {
     .eq("type", "extra_charge")
     .eq("status", "accepted");
 
+  // 4. Fetch pending/open extra charge proposals
+  const { data: pendingCharges } = await supabaseAdmin
+    .from("negotiations")
+    .select("id, initial_amount, description, created_at, initiated_by")
+    .eq("job_id", jobId)
+    .eq("type", "extra_charge")
+    .eq("status", "open");
+
   const totalExtra = extraCharges ? extraCharges.reduce((sum, c) => sum + Number(c.agreed_amount || 0), 0) : 0;
   const formattedExtraCharges = (extraCharges || []).map((c) => ({
     amount: Number(c.agreed_amount || 0),
     description: c.description || "Extra materials/labor",
+    created_at: c.created_at,
+  }));
+  const formattedPendingCharges = (pendingCharges || []).map((c) => ({
+    id: c.id,
+    amount: Number(c.initial_amount || 0),
+    description: c.description || "Extra materials/labor proposal",
+    initiated_by: c.initiated_by,
     created_at: c.created_at,
   }));
 
@@ -76,6 +113,7 @@ export async function calculateSettlement(jobId: string) {
     job_id: jobId,
     initial_escrow: initialEscrow,
     extra_charges: formattedExtraCharges,
+    pending_extra_charges: formattedPendingCharges,
     total_extra_charges: totalExtra,
     escrow_held: escrowHeld,
     gross_amount: finalAmount,

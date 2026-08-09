@@ -6,84 +6,132 @@ paths:
   /api/chat:
     get:
       summary: List all chat conversations for the current user
-      tags:
-        - Chat
+      tags: [Chat]
       security:
         - BearerAuth: []
       responses:
-        200:
+        '200':
           description: List of conversations
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      type: object
-  /api/chat/{id}/messages:
-    get:
-      summary: Get chat message history for a conversation/job
-      tags:
-        - Chat
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: integer
-          description: The Conversation or Job ID
-          example: 45
-      responses:
-        200:
-          description: Message history list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      type: object
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/chat/direct:
     post:
-      summary: Send a message in a conversation/job
-      tags:
-        - Chat
+      summary: Start a direct conversation with a worker
+      tags: [Chat]
       security:
         - BearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: integer
-          description: The Conversation or Job ID
-          example: 45
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - text
+              required: [worker_id]
               properties:
-                text:
+                worker_id:
                   type: string
-                  example: "Hi, I am on my way to your location."
+                  format: uuid
       responses:
-        201:
-          description: Message sent successfully
+        '201':
+          description: Conversation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/chat/{id}/messages:
+    get:
+      summary: Get chat message history
+      tags: [Chat]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 30
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Message history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+    post:
+      summary: Send a message in a conversation
+      tags: [Chat]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+                image_urls:
+                  type: array
+                  items:
+                    type: string
+                    format: uri
+                media_urls:
+                  type: array
+                  items:
+                    type: string
+                    format: uri
+                media_types:
+                  type: array
+                  items:
+                    type: string
+                    enum: [image, video]
+                client_message_id:
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+  /api/chat/{id}:
+    delete:
+      summary: Delete a conversation
+      tags: [Chat]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Conversation deleted
           content:
             application/json:
               schema:
@@ -91,12 +139,16 @@ paths:
                 properties:
                   success:
                     type: boolean
-                    example: true
-                  data:
-                    type: object
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data: {}
