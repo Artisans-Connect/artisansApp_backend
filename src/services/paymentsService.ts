@@ -540,10 +540,13 @@ export async function initializePaystackForSession(sessionId: string) {
   const amountInPesewas = Math.round(Number(session.amount) * 100);
   const callbackUrl = `${process.env.EXPRESS_API_BASE_URL || "https://artisansapp-backend.onrender.com/api"}/payments/callback`;
 
+  // Generate a fresh unique reference so Paystack doesn't reject duplicate references
+  const freshReference = `cm_pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
   const paystackData = await paystackService.initializeTransaction(
     email,
     amountInPesewas,
-    session.reference,
+    freshReference,
     callbackUrl,
     {
       job_id: session.job_id,
@@ -557,10 +560,15 @@ export async function initializePaystackForSession(sessionId: string) {
     throw appError(502, "Paystack did not return a payment URL", "PAYSTACK_INIT_FAILED");
   }
 
-  // Update the payment record with the real Paystack data
+  // Update session and payment records with the fresh reference and real Paystack data
+  await supabaseAdmin
+    .from("checkout_sessions")
+    .update({ reference: freshReference })
+    .eq("id", sessionId);
+
   await supabaseAdmin
     .from("payments")
-    .update({ paystack_payload: paystackData })
+    .update({ reference: freshReference, paystack_payload: paystackData })
     .eq("reference", session.reference);
 
   return { authorization_url: paystackData.authorization_url };
