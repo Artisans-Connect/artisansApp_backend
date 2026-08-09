@@ -338,6 +338,20 @@ router.get("/checkout-session/:id", async (req: Request, res: Response, next: Ne
 });
 
 /**
+ * POST /api/payments/checkout-session/:id/initialize-paystack
+ * Public endpoint — called by the payment gateway page when no valid
+ * Paystack authorization_url exists for this checkout session.
+ */
+router.post("/checkout-session/:id/initialize-paystack", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await paymentsService.initializePaystackForSession(req.params.id as string);
+    res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * POST /api/payments/sandbox/callback
  * Body: { reference: string }
  */

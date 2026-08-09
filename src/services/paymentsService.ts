@@ -499,3 +499,69 @@ export async function getCheckoutSession(sessionId: string) {
 
   return { ...session, authorization_url };
 }
+
+/**
+ * Re-initializes Paystack for an existing checkout session that doesn't
+ * have a valid authorization_url yet (e.g. Paystack was down when the
+ * session was originally created).
+ */
+export async function initializePaystackForSession(sessionId: string) {
+  const { data: session, error } = await supabaseAdmin
+    .from("checkout_sessions")
+    .select("*, job:jobs (client_id, title)")
+    .eq("id", sessionId)
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "CHECKOUT_SESSION_FETCH_FAILED");
+  if (!session) throw appError(404, "Checkout session not found", "CHECKOUT_SESSION_NOT_FOUND");
+  if (session.status === "completed") throw appError(400, "Session already completed", "SESSION_COMPLETED");
+  if (session.status === "expired") throw appError(400, "Session has expired", "SESSION_EXPIRED");
+
+  // Check if there's already a valid Paystack URL
+  const { data: existingPayment } = await supabaseAdmin
+    .from("payments")
+    .select("paystack_payload")
+    .eq("reference", session.reference)
+    .maybeSingle();
+
+  const existingUrl = (existingPayment?.paystack_payload as any)?.authorization_url;
+  if (existingUrl && existingUrl.startsWith("https://checkout.paystack.com")) {
+    return { authorization_url: existingUrl };
+  }
+
+  // Look up the client email
+  const { data: profile } = await supabaseAdmin
+    .from("profiles")
+    .select("email")
+    .eq("id", session.job?.client_id)
+    .maybeSingle();
+
+  const email = profile?.email || "customer@craftmatch.com";
+  const amountInPesewas = Math.round(Number(session.amount) * 100);
+  const callbackUrl = `${process.env.EXPRESS_API_BASE_URL || "https://artisansapp-backend.onrender.com/api"}/payments/callback`;
+
+  const paystackData = await paystackService.initializeTransaction(
+    email,
+    amountInPesewas,
+    session.reference,
+    callbackUrl,
+    {
+      job_id: session.job_id,
+      client_id: session.job?.client_id,
+      deposit_amount: session.amount,
+      checkout_session_id: sessionId,
+    }
+  );
+
+  if (!paystackData?.authorization_url) {
+    throw appError(502, "Paystack did not return a payment URL", "PAYSTACK_INIT_FAILED");
+  }
+
+  // Update the payment record with the real Paystack data
+  await supabaseAdmin
+    .from("payments")
+    .update({ paystack_payload: paystackData })
+    .eq("reference", session.reference);
+
+  return { authorization_url: paystackData.authorization_url };
+}
