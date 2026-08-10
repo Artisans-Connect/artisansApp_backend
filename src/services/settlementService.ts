@@ -174,11 +174,16 @@ export async function processPayoutAndRelease(jobId: string, reference?: string)
     reference: reference || `cm_release_${Date.now()}`,
   });
 
-  // 5. Complete job status
+  // 5. Complete job status & release worker availability
   await supabaseAdmin
     .from("jobs")
     .update({ status: "completed", updated_at: new Date().toISOString() })
     .eq("id", jobId);
+
+  await supabaseAdmin
+    .from("workers")
+    .update({ is_available: true, updated_at: new Date().toISOString() })
+    .eq("id", job.worker_id);
 
   await logEvent(jobId, job.client_id, "escrow_released", worker_payout, { worker_id: job.worker_id, platform_fee });
 

@@ -983,6 +983,7 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
   if (!data) throw appError(409, "Job status was modified concurrently. Please refresh.", "CONCURRENT_STATUS_CHANGE");
 
   matchingService.clearDispatchState(jobId);
+  await releaseWorkerAfterTerminalJob(job.worker_id);
   await notifyService.notifyCompletionSubmitted(job.client_id, jobId);
 
   return data;
