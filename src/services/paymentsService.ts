@@ -252,7 +252,7 @@ export async function verifyPayment(reference: string) {
       };
     } else {
       try {
-        paystackData = await paystackService.verifyTransaction(reference);
+        paystackData = await paystackService.verifyTransaction(payment.reference);
         isSuccess = paystackData?.status === "success";
       } catch (err: any) {
         logger("Paystack Verify Warning (using test fallback):", err.message);
