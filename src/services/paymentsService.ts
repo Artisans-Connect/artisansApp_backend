@@ -199,16 +199,24 @@ export async function initializePayment(userId: string, jobId: string, applicati
 }
 
 export async function verifyPayment(reference: string) {
-  console.log(`[PAYMENT] Verifying payment reference: ${reference}`);
+  console.log(`[PAYMENT] Verifying payment reference/ID: ${reference}`);
   try {
-    let { data: payment, error: fetchPayErr } = await supabaseAdmin
-      .from("payments")
-      .select("*")
-      .eq("reference", reference)
-      .maybeSingle();
+    let query = supabaseAdmin.from("payments").select("*");
+    
+    // Check if the input is a UUID (e.g. jobId or payment ID)
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reference);
+    
+    if (isUuid) {
+      query = query.or(`job_id.eq.${reference},id.eq.${reference}`);
+    } else {
+      query = query.eq("reference", reference);
+    }
+
+    const { data: payments, error: fetchPayErr } = await query.order("created_at", { ascending: false });
+    let payment = payments && payments.length > 0 ? payments[0] : null;
 
     // If not found by reference directly, check if reference belongs to a checkout_session that was updated
-    if (!payment) {
+    if (!payment && !isUuid) {
       const { data: session } = await supabaseAdmin
         .from("checkout_sessions")
         .select("reference")
