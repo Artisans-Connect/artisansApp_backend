@@ -273,7 +273,7 @@ export async function verifyPayment(reference: string) {
         const { data: sess } = await supabaseAdmin
           .from("checkout_sessions")
           .select("negotiation_id")
-          .eq("reference", reference)
+          .or(`reference.eq.${payment.reference},id.eq.${payment.reference}`)
           .maybeSingle();
         
         if (sess?.negotiation_id) {
@@ -293,7 +293,7 @@ export async function verifyPayment(reference: string) {
         const { error: payUpdateErr } = await supabaseAdmin
           .from("payments")
           .update({ status: "completed", paystack_payload: paystackData })
-          .eq("reference", reference);
+          .eq("reference", payment.reference);
 
         if (payUpdateErr) throw appError(500, payUpdateErr.message, "PAYMENT_UPDATE_FAILED");
 
@@ -320,7 +320,7 @@ export async function verifyPayment(reference: string) {
           job_id: jobId,
           amount: depositAmount,
           type: "extra_charge_deposit",
-          reference: reference,
+          reference: payment.reference,
         });
 
         return { success: true, message: "Extra charge payment processed successfully" };
@@ -329,16 +329,16 @@ export async function verifyPayment(reference: string) {
       const { error: payUpdateErr } = await supabaseAdmin
         .from("payments")
         .update({ status: "completed", paystack_payload: paystackData })
-        .eq("reference", reference);
+        .eq("reference", payment.reference);
 
       if (payUpdateErr) throw appError(500, payUpdateErr.message, "PAYMENT_UPDATE_FAILED");
 
-      await logEvent(jobId, clientId, "payment_verified", depositAmount, { reference });
+      await logEvent(jobId, clientId, "payment_verified", depositAmount, { reference: payment.reference });
 
       const { data: session } = await supabaseAdmin
         .from("checkout_sessions")
         .update({ status: "completed" })
-        .eq("reference", reference)
+        .eq("reference", payment.reference)
         .select()
         .maybeSingle();
 
