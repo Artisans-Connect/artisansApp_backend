@@ -194,39 +194,46 @@ router.get("/callback", async (req: Request, res: Response) => {
  * Public endpoint webhook receiver from Paystack.
  */
 router.post("/webhook", async (req: Request, res: Response) => {
-  const signature = req.headers["x-paystack-signature"] as string;
-  
-  if (!signature) {
-    res.status(401).send("No signature");
-    return;
-  }
-
-  // Validate webhook secret
-  const secret = process.env.PAYSTACK_SECRET_KEY || "";
-  const hash = crypto
-    .createHmac("sha512", secret)
-    .update(JSON.stringify(req.body))
-    .digest("hex");
-
-  if (hash !== signature) {
-    logger("Webhook signature check failed!");
-    res.status(400).send("Invalid signature");
-    return;
-  }
-
-  const event = req.body;
-  
-  if (event.event === "charge.success") {
-    const reference = event.data.reference;
-    logger(`Paystack Webhook: Received charge.success for ref ${reference}`);
-    try {
-      await paymentsService.verifyPayment(reference);
-    } catch (err) {
-      logger(`Webhook verification failed for reference ${reference}:`, err);
+  try {
+    const signature = req.headers["x-paystack-signature"] as string;
+    
+    if (!signature) {
+      res.status(401).send("No signature");
+      return;
     }
-  }
 
-  res.status(200).send("Webhook received");
+    // Validate webhook secret
+    const secret = process.env.PAYSTACK_SECRET_KEY || "";
+    const hash = crypto
+      .createHmac("sha512", secret)
+      .update(JSON.stringify(req.body))
+      .digest("hex");
+
+    if (hash !== signature) {
+      logger("Webhook signature check failed!");
+      res.status(400).send("Invalid signature");
+      return;
+    }
+
+    const event = req.body;
+    
+    if (event.event === "charge.success") {
+      const reference = event.data?.reference;
+      if (reference) {
+        logger(`Paystack Webhook: Received charge.success for ref ${reference}`);
+        const result = await paymentsService.verifyPayment(reference);
+        if (!result.success) {
+          logger(`Webhook verification notice for ref ${reference}: ${result.message}`);
+        }
+      }
+    }
+
+    res.status(200).send("Webhook received");
+  } catch (err: any) {
+    logger("Error processing Paystack webhook:", err?.message || err);
+    // Respond with 500 so Paystack automatically retries webhook delivery
+    res.status(500).send("Webhook processing error");
+  }
 });
 
 /**
