@@ -118,6 +118,7 @@ router.get("/callback", async (req: Request, res: Response) => {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Payment Successful</title>
+      <link rel="icon" type="image/png" href="https://artisans-app-frontend.vercel.app/favicon.png" />
       <style>
         body {
           font-family: "Satoshi", "General Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
