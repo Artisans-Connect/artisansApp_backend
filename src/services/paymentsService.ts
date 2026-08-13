@@ -605,3 +605,79 @@ export async function initializePaystackForSession(sessionId: string, platform: 
 
   return { authorization_url: paystackData.authorization_url };
 }
+
+/**
+ * Automatically reconciles payments in 'pending' status created within the last 2 hours.
+ * Safe, idempotent background task called periodically by schedulerService.
+ */
+export async function reconcilePendingPayments(): Promise<{ checked: number; resolved: number }> {
+  let resolvedCount = 0;
+  try {
+    const oneMinuteAgo = new Date(Date.now() - 1 * 60 * 1000).toISOString();
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    
+    const { data: pendingPayments, error } = await supabaseAdmin
+      .from("payments")
+      .select("id, reference, job_id, created_at, status")
+      .eq("status", "pending")
+      .gte("created_at", twoHoursAgo)
+      .lte("created_at", oneMinuteAgo)
+      .order("created_at", { ascending: false })
+      .limit(15);
+
+    if (error) {
+      logger("Reconciliation query warning:", error.message);
+      return { checked: 0, resolved: 0 };
+    }
+
+    if (!pendingPayments || pendingPayments.length === 0) {
+      return { checked: 0, resolved: 0 };
+    }
+
+    const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
+
+    for (const payment of pendingPayments) {
+      try {
+        let isSuccess = false;
+        let isFailed = false;
+
+        if (isSandbox) {
+          // In sandbox mode, do not force-complete unless verified by sandbox callback
+          continue;
+        } else {
+          try {
+            const paystackData = await paystackService.verifyTransaction(payment.reference);
+            if (paystackData?.status === "success") {
+              isSuccess = true;
+            } else if (paystackData?.status === "failed" || paystackData?.status === "abandoned") {
+              isFailed = true;
+            }
+          } catch (_) {
+            // Ignore individual fetch errors
+          }
+        }
+
+        if (isSuccess) {
+          logger(`Reconciliation auto-resolving payment reference: ${payment.reference}`);
+          const res = await verifyPayment(payment.reference);
+          if (res.success) {
+            resolvedCount++;
+          }
+        } else if (isFailed) {
+          logger(`Reconciliation marking payment as failed for ref: ${payment.reference}`);
+          await supabaseAdmin
+            .from("payments")
+            .update({ status: "failed" })
+            .eq("reference", payment.reference);
+        }
+      } catch (err: any) {
+        logger(`Reconciliation error for reference ${payment.reference}:`, err?.message || err);
+      }
+    }
+
+    return { checked: pendingPayments.length, resolved: resolvedCount };
+  } catch (err: any) {
+    logger("Error during payment reconciliation:", err?.message || err);
+    return { checked: 0, resolved: 0 };
+  }
+}

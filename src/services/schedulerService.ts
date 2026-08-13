@@ -4,6 +4,7 @@ import * as matchingService from "./matchingService";
 import * as jobsService from "./jobsService";
 
 import * as autoReleaseService from "./autoReleaseService";
+import * as paymentsService from "./paymentsService";
 
 export function startScheduler(): void {
   cron.schedule("* * * * *", () => {
@@ -13,6 +14,7 @@ export function startScheduler(): void {
     void matchingService.sendScheduledWorkerReminders().catch((err) => logger("Worker reminder cron failed:", err));
     void jobsService.sendWorkProgressCheckIns().catch((err) => logger("Work check-in cron failed:", err));
     void autoReleaseService.processAutoReleases().catch((err) => logger("Auto-release cron failed:", err));
+    void paymentsService.reconcilePendingPayments().catch((err) => logger("Payment reconciliation cron failed:", err));
   });
 
   cron.schedule("0 * * * *", () => {
