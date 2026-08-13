@@ -120,8 +120,8 @@ router.get("/callback", async (req: Request, res: Response) => {
       <title>Payment Successful</title>
       <style>
         body {
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-          background-color: #f7f9fc;
+          font-family: "Satoshi", "General Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          background-color: #FFF8F0;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -131,24 +131,26 @@ router.get("/callback", async (req: Request, res: Response) => {
         .card {
           background-color: #ffffff;
           padding: 40px;
-          border-radius: 20px;
-          box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+          border-radius: 24px;
+          box-shadow: 0 10px 30px rgba(44, 36, 24, 0.08), 0 4px 10px rgba(44, 36, 24, 0.04);
           text-align: center;
           max-width: 400px;
           width: 100%;
+          border: 1px solid #E8D5CB;
         }
         .icon {
           font-size: 60px;
-          color: #2ec4b6;
+          color: #34C759;
           margin-bottom: 20px;
         }
         h1 {
-          color: #0f172a;
+          color: #2C2418;
           font-size: 24px;
           margin-bottom: 10px;
+          font-weight: 800;
         }
         p {
-          color: #64748b;
+          color: #5C5243;
           font-size: 16px;
           line-height: 1.5;
           margin-bottom: 30px;
@@ -157,7 +159,7 @@ router.get("/callback", async (req: Request, res: Response) => {
           display: block;
           width: 100%;
           box-sizing: border-box;
-          background-color: #2ec4b6;
+          background-color: #C15A3D;
           color: white;
           padding: 14px 20px;
           text-decoration: none;
@@ -167,9 +169,18 @@ router.get("/callback", async (req: Request, res: Response) => {
           margin-bottom: 12px;
           border: none;
           cursor: pointer;
+          transition: background-color 0.2s, transform 0.1s;
+          box-shadow: 0 4px 12px rgba(193, 90, 61, 0.2);
+        }
+        .btn:hover {
+          background-color: #A04830;
         }
         .btn-secondary {
-          background-color: #0f172a;
+          background-color: #2C2418;
+          box-shadow: 0 4px 12px rgba(44, 36, 24, 0.15);
+        }
+        .btn-secondary:hover {
+          background-color: #5C5243;
         }
       </style>
       <script>
