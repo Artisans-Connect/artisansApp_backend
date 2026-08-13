@@ -193,7 +193,7 @@ router.get("/callback", async (req: Request, res: Response) => {
         <h1>Payment Successful!</h1>
         <p>${descriptionText}</p>
         <a href="${primaryBtnUrl}" class="btn">${primaryBtnLabel}</a>
-        <button onclick="window.close(); history.back();" class="btn btn-secondary">Close / Return</button>
+        <button onclick="window.open('', '_self'); window.close();" class="btn btn-secondary">Close / Return</button>
       </div>
     </body>
     </html>
