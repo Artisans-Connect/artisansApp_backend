@@ -39,13 +39,13 @@ function verifyPaystackSignature(req: Request, res: Response, next: NextFunction
  */
 router.post("/initialize", authMiddleware, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { jobId, applicationId } = req.body;
+    const { jobId, applicationId, platform } = req.body;
     if (!jobId) {
       next(appError(400, "jobId is required", "VALIDATION_ERROR"));
       return;
     }
 
-    const result = await paymentsService.initializePayment(req.user!.id, jobId, applicationId);
+    const result = await paymentsService.initializePayment(req.user!.id, jobId, applicationId, platform);
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
@@ -76,6 +76,7 @@ router.get("/verify/:reference", authMiddleware, async (req: Request, res: Respo
  */
 router.get("/callback", async (req: Request, res: Response) => {
   const reference = req.query.reference as string;
+  const platform = req.query.platform as string;
   
   if (reference) {
     try {
@@ -84,6 +85,30 @@ router.get("/callback", async (req: Request, res: Response) => {
       logger(`Callback verification failed for reference ${reference}:`, err);
     }
   }
+
+  const webAppUrl = (process.env.CRAFTMATCH_WEB_APP_URL || "https://artisans-app-frontend.vercel.app/").replace(/\/$/, "");
+  const isWeb = platform === "web";
+  
+  // Choose button text, link, and script action depending on the platform
+  const primaryBtnLabel = isWeb ? "Return to Website" : "Return to Mobile App";
+  const primaryBtnUrl = isWeb 
+    ? `${webAppUrl}/#/payment-success?reference=${reference}` 
+    : `craftmatch://payment-success?reference=${reference}`;
+  
+  const autoRedirectScript = isWeb
+    ? `
+      setTimeout(function() {
+        window.location.href = "${primaryBtnUrl}";
+      }, 3000);
+    `
+    : `
+      // Attempt deep-link automatically on load for mobile app
+      window.location.href = "${primaryBtnUrl}";
+    `;
+
+  const descriptionText = isWeb
+    ? "Your deposit has been securely placed in escrow. You can now close this tab or return to the CraftMatch website."
+    : "Your deposit has been securely placed in escrow. You can now close this tab or return to the CraftMatch app.";
 
   // Render a premium success landing page that instructs user to return to app
   res.status(200).send(`
@@ -148,16 +173,15 @@ router.get("/callback", async (req: Request, res: Response) => {
         }
       </style>
       <script>
-        // Attempt deep-link automatically on load for mobile app
-        window.location.href = "craftmatch://payment-success?reference=${reference}";
+        ${autoRedirectScript}
       </script>
     </head>
     <body>
       <div class="card">
         <div class="icon">✓</div>
         <h1>Payment Successful!</h1>
-        <p>Your deposit has been securely placed in escrow. You can now close this tab or return to the CraftMatch app.</p>
-        <a href="craftmatch://payment-success?reference=${reference}" class="btn">Return to Mobile App</a>
+        <p>${descriptionText}</p>
+        <a href="${primaryBtnUrl}" class="btn">${primaryBtnLabel}</a>
         <button onclick="window.close(); history.back();" class="btn btn-secondary">Close / Return</button>
       </div>
     </body>
@@ -353,7 +377,8 @@ router.get("/checkout-session/:id", async (req: Request, res: Response, next: Ne
  */
 router.post("/checkout-session/:id/initialize-paystack", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const result = await paymentsService.initializePaystackForSession(req.params.id as string);
+    const { platform } = req.body;
+    const result = await paymentsService.initializePaystackForSession(req.params.id as string, platform);
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
@@ -401,6 +426,7 @@ router.get("/settlement/:jobId", authMiddleware, async (req: Request, res: Respo
  */
 router.post("/settlement/:jobId/checkout", authMiddleware, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const { platform } = req.body;
     const calculation = await settlementService.calculateSettlement(req.params.jobId as string);
     if (calculation.outstanding_balance <= 0) {
       // Direct release without checkout since outstanding balance is 0
@@ -420,7 +446,7 @@ router.post("/settlement/:jobId/checkout", authMiddleware, idempotencyMiddleware
     });
 
     // 2. Initialize checkout session
-    const paymentInit = await paymentsService.initializePayment(req.user!.id, req.params.jobId as string);
+    const paymentInit = await paymentsService.initializePayment(req.user!.id, req.params.jobId as string, undefined, platform);
     res.status(200).json({ success: true, data: paymentInit });
   } catch (err) {
     next(err);

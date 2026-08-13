@@ -12,7 +12,7 @@ export * from "./payments/paystackService";
 export * from "./payments/escrowService";
 export * from "./extraChargeService";
 
-export async function initializePayment(userId: string, jobId: string, applicationId?: string) {
+export async function initializePayment(userId: string, jobId: string, applicationId?: string, platform: string = "mobile") {
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
     .select("id, client_id, status, budget_fixed, job_mode, category_id")
@@ -143,13 +143,16 @@ export async function initializePayment(userId: string, jobId: string, applicati
   let paystackData: any = null;
   const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
 
+  const callbackBase = `${process.env.EXPRESS_API_BASE_URL || "https://artisansapp-backend.onrender.com/api"}/payments/callback`;
+  const callbackUrl = platform ? `${callbackBase}?platform=${platform}` : callbackBase;
+
   if (!isSandbox) {
     try {
       paystackData = await paystackService.initializeTransaction(
         email,
         amountInPesewas,
         reference,
-        `${process.env.EXPRESS_API_BASE_URL || "https://artisansapp-backend.onrender.com/api"}/payments/callback`,
+        callbackUrl,
         {
           job_id: jobId,
           client_id: userId,
@@ -165,8 +168,8 @@ export async function initializePayment(userId: string, jobId: string, applicati
 
   const portalBaseUrl = (process.env.VERIFICATION_PORTAL_URL || "https://craft-match-verification-portal.vercel.app").replace(/\/$/, "");
   const checkout_url = isSandbox
-    ? `${portalBaseUrl}/payment-gateway/sandbox?sessionId=${sessionId}`
-    : `${portalBaseUrl}/payment-gateway?sessionId=${sessionId}`;
+    ? `${portalBaseUrl}/payment-gateway/sandbox?sessionId=${sessionId}${platform ? `&platform=${platform}` : ""}`
+    : `${portalBaseUrl}/payment-gateway?sessionId=${sessionId}${platform ? `&platform=${platform}` : ""}`;
 
   if (!paystackData) {
     paystackData = {
@@ -533,7 +536,7 @@ export async function getCheckoutSession(sessionId: string) {
  * have a valid authorization_url yet (e.g. Paystack was down when the
  * session was originally created).
  */
-export async function initializePaystackForSession(sessionId: string) {
+export async function initializePaystackForSession(sessionId: string, platform: string = "mobile") {
   const { data: session, error } = await supabaseAdmin
     .from("checkout_sessions")
     .select("*, job:jobs (client_id, title)")
@@ -566,7 +569,8 @@ export async function initializePaystackForSession(sessionId: string) {
 
   const email = profile?.email || "customer@craftmatch.com";
   const amountInPesewas = Math.round(Number(session.amount) * 100);
-  const callbackUrl = `${process.env.EXPRESS_API_BASE_URL || "https://artisansapp-backend.onrender.com/api"}/payments/callback`;
+  const callbackBase = `${process.env.EXPRESS_API_BASE_URL || "https://artisansapp-backend.onrender.com/api"}/payments/callback`;
+  const callbackUrl = platform ? `${callbackBase}?platform=${platform}` : callbackBase;
 
   // Generate a fresh unique reference so Paystack doesn't reject duplicate references
   const freshReference = `cm_pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
