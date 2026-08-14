@@ -242,7 +242,7 @@ export async function listAdminReports(query: {
 }) {
   let request = supabaseAdmin
     .from("reports")
-    .select("id, ticket_number, category, description, priority, status, is_emergency, action_taken, reporter_id, reported_id, booking_id, assigned_moderator_id, created_at, updated_at, reporter:profiles!reports_reporter_id_fkey(id, full_name, phone), reported:profiles!reports_reported_id_fkey(id, full_name, phone, account_status)")
+    .select("id, ticket_number, category, description, priority, status, is_emergency, action_taken, reporter_id, reported_id, booking_id, assigned_moderator_id, created_at, updated_at")
     .order("is_emergency", { ascending: false })
     .order("created_at", { ascending: false })
     .limit(200);
@@ -264,29 +264,62 @@ export async function listAdminReports(query: {
     request = request.or(`ticket_number.ilike.%${term}%,category.ilike.%${term}%,description.ilike.%${term}%`);
   }
 
-  const { data, error } = await request;
+  const { data: reports, error } = await request;
   if (error) throw appError(500, error.message, "ADMIN_REPORTS_FETCH_FAILED");
-  return data ?? [];
+  if (!reports || reports.length === 0) return [];
+
+  const profileIds = Array.from(
+    new Set(
+      reports
+        .flatMap((r) => [r.reporter_id, r.reported_id])
+        .filter((id): id is string => Boolean(id))
+    )
+  );
+
+  const { data: profiles } = profileIds.length > 0
+    ? await supabaseAdmin
+        .from("profiles")
+        .select("id, full_name, phone, account_status")
+        .in("id", profileIds)
+    : { data: [] };
+
+  const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
+
+  return reports.map((report) => ({
+    ...report,
+    reporter: report.reporter_id ? profileMap.get(report.reporter_id) ?? null : null,
+    reported: report.reported_id ? profileMap.get(report.reported_id) ?? null : null,
+  }));
 }
 
 export async function getAdminReportDetail(reportId: string) {
   const { data: report, error } = await supabaseAdmin
     .from("reports")
-    .select("*, reporter:profiles!reports_reporter_id_fkey(id, full_name, phone, avatar_url, created_at), reported:profiles!reports_reported_id_fkey(id, full_name, phone, avatar_url, account_status, created_at, workers(id, is_verified, rating, total_jobs)), booking:jobs!reports_booking_id_fkey(*)")
+    .select("*")
     .eq("id", reportId)
     .maybeSingle();
 
   if (error) throw appError(500, error.message, "ADMIN_REPORT_DETAIL_FETCH_FAILED");
   if (!report) throw appError(404, "Report not found", "REPORT_NOT_FOUND");
 
-  // Fetch Audit Logs
-  const { data: auditLogs } = await supabaseAdmin
-    .from("report_audit_logs")
-    .select("id, actor_id, actor_role, action, previous_status, new_status, notes, created_at, actor:profiles(full_name)")
-    .eq("report_id", reportId)
-    .order("created_at", { ascending: true });
+  const [
+    { data: reporter },
+    { data: reported },
+    { data: booking },
+    { data: auditLogs },
+  ] = await Promise.all([
+    report.reporter_id
+      ? supabaseAdmin.from("profiles").select("id, full_name, phone, avatar_url, created_at").eq("id", report.reporter_id).maybeSingle()
+      : { data: null },
+    report.reported_id
+      ? supabaseAdmin.from("profiles").select("id, full_name, phone, avatar_url, account_status, created_at, workers(id, is_verified, rating, total_jobs)").eq("id", report.reported_id).maybeSingle()
+      : { data: null },
+    report.booking_id
+      ? supabaseAdmin.from("jobs").select("*").eq("id", report.booking_id).maybeSingle()
+      : { data: null },
+    supabaseAdmin.from("report_audit_logs").select("id, actor_id, actor_role, action, previous_status, new_status, notes, created_at").eq("report_id", reportId).order("created_at", { ascending: true }),
+  ]);
 
-  // Calculate Repeat Offender Risk Signals for Reported User
   let repeatOffenderRisk = null;
   if (report.reported_id) {
     repeatOffenderRisk = await calculateRepeatOffenderRisk(report.reported_id, report.reporter_id);
@@ -294,6 +327,9 @@ export async function getAdminReportDetail(reportId: string) {
 
   return {
     ...report,
+    reporter: reporter ?? null,
+    reported: reported ?? null,
+    booking: booking ?? null,
     audit_logs: auditLogs ?? [],
     repeat_offender_risk: repeatOffenderRisk,
   };
