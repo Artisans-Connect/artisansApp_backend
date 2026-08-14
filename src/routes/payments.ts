@@ -39,13 +39,13 @@ function verifyPaystackSignature(req: Request, res: Response, next: NextFunction
  */
 router.post("/initialize", authMiddleware, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { jobId, applicationId } = req.body;
+    const { jobId, applicationId, platform } = req.body;
     if (!jobId) {
       next(appError(400, "jobId is required", "VALIDATION_ERROR"));
       return;
     }
 
-    const result = await paymentsService.initializePayment(req.user!.id, jobId, applicationId);
+    const result = await paymentsService.initializePayment(req.user!.id, jobId, applicationId, platform);
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
@@ -76,6 +76,7 @@ router.get("/verify/:reference", authMiddleware, async (req: Request, res: Respo
  */
 router.get("/callback", async (req: Request, res: Response) => {
   const reference = req.query.reference as string;
+  const platform = req.query.platform as string;
   
   if (reference) {
     try {
@@ -85,6 +86,30 @@ router.get("/callback", async (req: Request, res: Response) => {
     }
   }
 
+  const webAppUrl = (process.env.CRAFTMATCH_WEB_APP_URL || "https://artisans-app-frontend.vercel.app/").replace(/\/$/, "");
+  const isWeb = platform === "web";
+  
+  // Choose button text, link, and script action depending on the platform
+  const primaryBtnLabel = isWeb ? "Return to Website" : "Return to Mobile App";
+  const primaryBtnUrl = isWeb 
+    ? `${webAppUrl}/#/payment-success?reference=${reference}` 
+    : `craftmatch://payment-success?reference=${reference}`;
+  
+  const autoRedirectScript = isWeb
+    ? `
+      setTimeout(function() {
+        window.location.href = "${primaryBtnUrl}";
+      }, 3000);
+    `
+    : `
+      // Attempt deep-link automatically on load for mobile app
+      window.location.href = "${primaryBtnUrl}";
+    `;
+
+  const descriptionText = isWeb
+    ? "Your deposit has been securely placed in escrow. You can now close this tab or return to the CraftMatch website."
+    : "Your deposit has been securely placed in escrow. You can now close this tab or return to the CraftMatch app.";
+
   // Render a premium success landing page that instructs user to return to app
   res.status(200).send(`
     <!DOCTYPE html>
@@ -93,10 +118,11 @@ router.get("/callback", async (req: Request, res: Response) => {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Payment Successful</title>
+      <link rel="icon" type="image/png" href="https://artisans-app-frontend.vercel.app/favicon.png" />
       <style>
         body {
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-          background-color: #f7f9fc;
+          font-family: "Satoshi", "General Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          background-color: #FFF8F0;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -106,24 +132,26 @@ router.get("/callback", async (req: Request, res: Response) => {
         .card {
           background-color: #ffffff;
           padding: 40px;
-          border-radius: 20px;
-          box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+          border-radius: 24px;
+          box-shadow: 0 10px 30px rgba(44, 36, 24, 0.08), 0 4px 10px rgba(44, 36, 24, 0.04);
           text-align: center;
           max-width: 400px;
           width: 100%;
+          border: 1px solid #E8D5CB;
         }
         .icon {
           font-size: 60px;
-          color: #2ec4b6;
+          color: #34C759;
           margin-bottom: 20px;
         }
         h1 {
-          color: #0f172a;
+          color: #2C2418;
           font-size: 24px;
           margin-bottom: 10px;
+          font-weight: 800;
         }
         p {
-          color: #64748b;
+          color: #5C5243;
           font-size: 16px;
           line-height: 1.5;
           margin-bottom: 30px;
@@ -132,7 +160,7 @@ router.get("/callback", async (req: Request, res: Response) => {
           display: block;
           width: 100%;
           box-sizing: border-box;
-          background-color: #2ec4b6;
+          background-color: #C15A3D;
           color: white;
           padding: 14px 20px;
           text-decoration: none;
@@ -142,23 +170,31 @@ router.get("/callback", async (req: Request, res: Response) => {
           margin-bottom: 12px;
           border: none;
           cursor: pointer;
+          transition: background-color 0.2s, transform 0.1s;
+          box-shadow: 0 4px 12px rgba(193, 90, 61, 0.2);
+        }
+        .btn:hover {
+          background-color: #A04830;
         }
         .btn-secondary {
-          background-color: #0f172a;
+          background-color: #2C2418;
+          box-shadow: 0 4px 12px rgba(44, 36, 24, 0.15);
+        }
+        .btn-secondary:hover {
+          background-color: #5C5243;
         }
       </style>
       <script>
-        // Attempt deep-link automatically on load for mobile app
-        window.location.href = "craftmatch://payment-success?reference=${reference}";
+        ${autoRedirectScript}
       </script>
     </head>
     <body>
       <div class="card">
         <div class="icon">✓</div>
         <h1>Payment Successful!</h1>
-        <p>Your deposit has been securely placed in escrow. You can now close this tab or return to the CraftMatch app.</p>
-        <a href="craftmatch://payment-success?reference=${reference}" class="btn">Return to Mobile App</a>
-        <button onclick="window.close(); history.back();" class="btn btn-secondary">Close / Return</button>
+        <p>${descriptionText}</p>
+        <a href="${primaryBtnUrl}" class="btn">${primaryBtnLabel}</a>
+        <button onclick="window.open('', '_self'); window.close();" class="btn btn-secondary">Close / Return</button>
       </div>
     </body>
     </html>
@@ -170,39 +206,46 @@ router.get("/callback", async (req: Request, res: Response) => {
  * Public endpoint webhook receiver from Paystack.
  */
 router.post("/webhook", async (req: Request, res: Response) => {
-  const signature = req.headers["x-paystack-signature"] as string;
-  
-  if (!signature) {
-    res.status(401).send("No signature");
-    return;
-  }
-
-  // Validate webhook secret
-  const secret = process.env.PAYSTACK_SECRET_KEY || "";
-  const hash = crypto
-    .createHmac("sha512", secret)
-    .update(JSON.stringify(req.body))
-    .digest("hex");
-
-  if (hash !== signature) {
-    logger("Webhook signature check failed!");
-    res.status(400).send("Invalid signature");
-    return;
-  }
-
-  const event = req.body;
-  
-  if (event.event === "charge.success") {
-    const reference = event.data.reference;
-    logger(`Paystack Webhook: Received charge.success for ref ${reference}`);
-    try {
-      await paymentsService.verifyPayment(reference);
-    } catch (err) {
-      logger(`Webhook verification failed for reference ${reference}:`, err);
+  try {
+    const signature = req.headers["x-paystack-signature"] as string;
+    
+    if (!signature) {
+      res.status(401).send("No signature");
+      return;
     }
-  }
 
-  res.status(200).send("Webhook received");
+    // Validate webhook secret
+    const secret = process.env.PAYSTACK_SECRET_KEY || "";
+    const hash = crypto
+      .createHmac("sha512", secret)
+      .update(JSON.stringify(req.body))
+      .digest("hex");
+
+    if (hash !== signature) {
+      logger("Webhook signature check failed!");
+      res.status(400).send("Invalid signature");
+      return;
+    }
+
+    const event = req.body;
+    
+    if (event.event === "charge.success") {
+      const reference = event.data?.reference;
+      if (reference) {
+        logger(`Paystack Webhook: Received charge.success for ref ${reference}`);
+        const result = await paymentsService.verifyPayment(reference);
+        if (!result.success) {
+          logger(`Webhook verification notice for ref ${reference}: ${result.message}`);
+        }
+      }
+    }
+
+    res.status(200).send("Webhook received");
+  } catch (err: any) {
+    logger("Error processing Paystack webhook:", err?.message || err);
+    // Respond with 500 so Paystack automatically retries webhook delivery
+    res.status(500).send("Webhook processing error");
+  }
 });
 
 /**
@@ -353,7 +396,8 @@ router.get("/checkout-session/:id", async (req: Request, res: Response, next: Ne
  */
 router.post("/checkout-session/:id/initialize-paystack", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const result = await paymentsService.initializePaystackForSession(req.params.id as string);
+    const { platform } = req.body;
+    const result = await paymentsService.initializePaystackForSession(req.params.id as string, platform);
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
@@ -401,6 +445,7 @@ router.get("/settlement/:jobId", authMiddleware, async (req: Request, res: Respo
  */
 router.post("/settlement/:jobId/checkout", authMiddleware, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const { platform } = req.body;
     const calculation = await settlementService.calculateSettlement(req.params.jobId as string);
     if (calculation.outstanding_balance <= 0) {
       // Direct release without checkout since outstanding balance is 0
@@ -420,7 +465,7 @@ router.post("/settlement/:jobId/checkout", authMiddleware, idempotencyMiddleware
     });
 
     // 2. Initialize checkout session
-    const paymentInit = await paymentsService.initializePayment(req.user!.id, req.params.jobId as string);
+    const paymentInit = await paymentsService.initializePayment(req.user!.id, req.params.jobId as string, undefined, platform);
     res.status(200).json({ success: true, data: paymentInit });
   } catch (err) {
     next(err);

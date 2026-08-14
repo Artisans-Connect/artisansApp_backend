@@ -305,6 +305,53 @@ export async function listAuditLogs(limit = 100) {
   return data ?? [];
 }
 
+export async function updateVerificationScoreAndFraud(verificationId: string) {
+  const [appRes, docsRes, refsRes] = await Promise.all([
+    supabaseAdmin.from("worker_verifications").select("*").eq("id", verificationId).maybeSingle(),
+    supabaseAdmin.from("verification_documents").select("*").eq("verification_id", verificationId),
+    supabaseAdmin.from("verification_references").select("*").eq("verification_id", verificationId),
+  ]);
+
+  if (!appRes.data) return;
+  const app = appRes.data;
+  const docs = docsRes.data ?? [];
+  const refs = refsRes.data ?? [];
+
+  let score = 30;
+  const hasIdFront = docs.some((d) => d.document_type === "id_front");
+  const hasIdBack = docs.some((d) => d.document_type === "id_back");
+  const hasSelfie = docs.some((d) => d.document_type === "selfie");
+  const hasCert = docs.some((d) => d.document_type === "certification");
+  const hasPortfolio = docs.some((d) => d.document_type === "portfolio");
+  const validRefsCount = refs.filter((r) => r.reference_name && r.phone_number).length;
+
+  if (hasIdFront) score += 15;
+  if (hasIdBack) score += 10;
+  if (hasSelfie) score += 15;
+  if (hasCert) score += 10;
+  if (hasPortfolio) score += 5;
+  if (validRefsCount >= 2) score += 10;
+  if ((app.years_of_experience ?? 0) >= 5) score += 5;
+
+  const confidenceScore = Math.min(score, 100);
+
+  const fraudIndicators: string[] = [];
+  if (!hasSelfie) fraudIndicators.push("missing_selfie");
+  if (!hasIdFront || !hasIdBack) fraudIndicators.push("low_quality_id");
+  if (validRefsCount === 0) fraudIndicators.push("no_references");
+
+  await supabaseAdmin
+    .from("worker_verifications")
+    .update({
+      confidence_score: confidenceScore,
+      fraud_indicators: fraudIndicators,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", verificationId);
+
+  return { confidenceScore, fraudIndicators };
+}
+
 export async function submitApplication(userId: string | null, body: unknown) {
   const parsed = applicationSchema.safeParse(body);
   if (!parsed.success) {
@@ -329,6 +376,15 @@ export async function submitApplication(userId: string | null, body: unknown) {
     throw appError(409, "You already have an active verification application", "VERIFICATION_EXISTS");
   }
 
+  const initialValidRefs = input.references.filter((r) => r.reference_name && r.phone_number).length;
+  let initialScore = 30;
+  if (initialValidRefs >= 2) initialScore += 10;
+  if ((input.years_of_experience ?? 0) >= 5) initialScore += 5;
+
+  const initialFraud: string[] = [];
+  initialFraud.push("missing_selfie", "low_quality_id");
+  if (initialValidRefs === 0) initialFraud.push("no_references");
+
   const verificationPatch = {
     worker_id: workerId,
     status: "pending" as VerificationStatus,
@@ -343,8 +399,8 @@ export async function submitApplication(userId: string | null, body: unknown) {
     business_name: input.business_name,
     current_region: input.current_region,
     current_city: input.current_city,
-    confidence_score: input.confidence_score,
-    fraud_indicators: input.fraud_indicators,
+    confidence_score: initialScore,
+    fraud_indicators: initialFraud,
     submitted_at: new Date().toISOString(),
     reviewed_at: null,
     rejection_reason: "",
@@ -389,17 +445,68 @@ export async function submitApplication(userId: string | null, body: unknown) {
       .eq("code_hash", hashCode(input.handoff_code));
   }
 
+  await updateVerificationScoreAndFraud(verification.id);
+
   return verification;
 }
 
-export async function uploadApplicationDocuments(userId: string | null, body: unknown) {
-  const parsed = documentUploadSchema.safeParse(body);
-  if (!parsed.success) {
-    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid document upload", "VALIDATION_ERROR");
+export async function uploadApplicationDocuments(
+  userId: string | null,
+  body: unknown,
+  multerFiles?: Express.Multer.File[],
+) {
+  let verificationId = (body as Record<string, unknown>)?.verification_id as string | undefined;
+  let handoffCode = (body as Record<string, unknown>)?.handoff_code as string | undefined;
+
+  let fileList: Array<{
+    document_type: string;
+    file_name: string;
+    mime_type: string;
+    size: number;
+    buffer: Buffer;
+  }> = [];
+
+  if (multerFiles && multerFiles.length > 0) {
+    const rawDocTypes = (body as Record<string, unknown>)?.document_types;
+    let docTypesArray: string[] = [];
+    if (Array.isArray(rawDocTypes)) {
+      docTypesArray = rawDocTypes.map(String);
+    } else if (typeof rawDocTypes === "string") {
+      try {
+        docTypesArray = JSON.parse(rawDocTypes);
+      } catch {
+        docTypesArray = [rawDocTypes];
+      }
+    }
+
+    fileList = multerFiles.map((file, idx) => ({
+      document_type: String(docTypesArray[idx] || (body as Record<string, unknown>)?.document_type || "id_front"),
+      file_name: file.originalname || `file_${idx}`,
+      mime_type: file.mimetype || "application/octet-stream",
+      size: file.size,
+      buffer: file.buffer,
+    }));
+  } else {
+    const parsed = documentUploadSchema.safeParse(body);
+    if (!parsed.success) {
+      throw appError(400, parsed.error.issues[0]?.message ?? "Invalid document upload", "VALIDATION_ERROR");
+    }
+    verificationId = parsed.data.verification_id;
+    handoffCode = parsed.data.handoff_code;
+    fileList = parsed.data.files.map((f) => ({
+      document_type: f.document_type,
+      file_name: f.file_name,
+      mime_type: f.mime_type,
+      size: f.size,
+      buffer: Buffer.from(f.content_base64, "base64"),
+    }));
   }
 
-  const input = parsed.data;
-  const workerId = userId ?? (input.handoff_code ? await workerIdFromHandoff(input.handoff_code, true) : null);
+  if (!verificationId) {
+    throw appError(400, "verification_id is required", "VALIDATION_ERROR");
+  }
+
+  const workerId = userId ?? (handoffCode ? await workerIdFromHandoff(handoffCode, true) : null);
   if (!workerId) throw appError(401, "Sign in or open verification from the app", "UNAUTHORIZED");
 
   await ensureWorker(workerId);
@@ -407,7 +514,7 @@ export async function uploadApplicationDocuments(userId: string | null, body: un
   const { data: verification, error: verificationError } = await supabaseAdmin
     .from("worker_verifications")
     .select("id, worker_id")
-    .eq("id", input.verification_id)
+    .eq("id", verificationId)
     .eq("worker_id", workerId)
     .maybeSingle();
 
@@ -416,14 +523,13 @@ export async function uploadApplicationDocuments(userId: string | null, body: un
 
   const uploadedDocuments = [] as Array<Record<string, unknown>>;
 
-  for (const file of input.files) {
+  for (const file of fileList) {
     const ext = file.file_name.split(".").pop()?.toLowerCase() || "bin";
     const path = `${workerId}/${verification.id}/${file.document_type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const buffer = Buffer.from(file.content_base64, "base64");
 
     const { error: uploadError } = await supabaseAdmin.storage
       .from("verification-docs")
-      .upload(path, buffer, { contentType: file.mime_type, upsert: true });
+      .upload(path, file.buffer, { contentType: file.mime_type, upsert: true });
 
     if (uploadError) throw appError(500, uploadError.message, "DOCUMENT_UPLOAD_FAILED");
 
@@ -455,6 +561,8 @@ export async function uploadApplicationDocuments(userId: string | null, body: un
     action: "documents_uploaded",
     notes: "Documents uploaded by worker",
   });
+
+  await updateVerificationScoreAndFraud(verification.id);
 
   return uploadedDocuments;
 }

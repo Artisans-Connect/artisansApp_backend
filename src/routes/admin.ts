@@ -4,10 +4,27 @@ import { catchAsync } from "../utils/catchAsync";
 import { paramId } from "../utils/routeParams";
 import * as adminService from "../services/adminService";
 import * as reportsService from "../services/reportsService";
+import * as notificationsService from "../services/notificationsService";
 
 const router = Router();
 
 router.use(requirePortalAdmin);
+
+router.post(
+  "/broadcast-notification",
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await notificationsService.broadcastNotification(req.body);
+    res.status(201).json({ success: true, data: result });
+  }),
+);
+
+router.get(
+  "/dashboard-stats",
+  catchAsync(async (_req: Request, res: Response) => {
+    const stats = await adminService.getDashboardStats();
+    res.status(200).json({ success: true, data: stats });
+  }),
+);
 
 router.get(
   "/categories",
@@ -82,6 +99,14 @@ router.patch(
   catchAsync(async (req: Request, res: Response) => {
     const account = await adminService.reactivateAccount(paramId(req.params.id));
     res.status(200).json({ success: true, data: account });
+  }),
+);
+
+router.patch(
+  "/accounts/:id/tier",
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await adminService.updateAccountVerificationTier(paramId(req.params.id), req.body);
+    res.status(200).json({ success: true, data: result });
   }),
 );
 

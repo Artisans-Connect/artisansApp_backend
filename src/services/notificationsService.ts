@@ -59,3 +59,58 @@ export async function deleteNotification(userId: string, notificationId: string)
   if (error) throw appError(500, error.message, "NOTIFICATION_DELETE_FAILED");
   return { success: true };
 }
+
+export async function broadcastNotification(payload: {
+  target: "all" | "workers" | "clients";
+  title: string;
+  body: string;
+  type?: string;
+}) {
+  if (!payload.title?.trim() || !payload.body?.trim()) {
+    throw appError(400, "Title and body are required for broadcast notification", "VALIDATION_ERROR");
+  }
+
+  let query = supabaseAdmin.from("profiles").select("id, signup_type, last_active_mode");
+
+  if (payload.target === "workers") {
+    const { data: workers } = await supabaseAdmin.from("workers").select("id");
+    const workerIds = (workers ?? []).map((w) => w.id);
+    if (workerIds.length > 0) {
+      query = query.in("id", workerIds);
+    }
+  }
+
+  const { data: targetProfiles, error } = await query;
+  if (error) throw appError(500, error.message, "PROFILES_FETCH_FAILED");
+
+  const profilesToNotify = (targetProfiles ?? []).filter((p) => {
+    if (payload.target === "workers") return true;
+    if (payload.target === "clients") return p.last_active_mode === "client" || p.signup_type === "client";
+    return true;
+  });
+
+  if (profilesToNotify.length === 0) {
+    return { count: 0, target: payload.target };
+  }
+
+  const now = new Date().toISOString();
+  const notificationRows = profilesToNotify.map((p) => ({
+    user_id: p.id,
+    title: payload.title.trim(),
+    body: payload.body.trim(),
+    type: payload.type || "system_announcement",
+    created_at: now,
+  }));
+
+  const { error: insertError } = await supabaseAdmin
+    .from("notifications")
+    .insert(notificationRows);
+
+  if (insertError) throw appError(500, insertError.message, "NOTIFICATIONS_BROADCAST_FAILED");
+
+  return {
+    count: profilesToNotify.length,
+    target: payload.target,
+    title: payload.title.trim(),
+  };
+}

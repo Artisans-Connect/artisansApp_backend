@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import multer from "multer";
 import { authMiddleware } from "../middleware/auth";
 import { catchAsync } from "../utils/catchAsync";
 import { paramId } from "../utils/routeParams";
@@ -108,11 +109,18 @@ router.post(
   }),
 );
 
+const upload = multer({
+  limits: { fileSize: 10 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+});
+
 router.post(
   "/me/application/documents",
+  upload.array("files", 10),
   catchAsync(async (req: Request, res: Response) => {
     const userId = await readBearerUserId(req);
-    const documents = await verificationService.uploadApplicationDocuments(userId, req.body);
+    const multerFiles = req.files as Express.Multer.File[] | undefined;
+    const documents = await verificationService.uploadApplicationDocuments(userId, req.body, multerFiles);
     res.status(201).json({ success: true, data: documents });
   }),
 );
