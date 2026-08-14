@@ -215,7 +215,28 @@ export async function listUserBlocks(blockerId: string) {
     .eq("blocker_id", blockerId)
     .order("created_at", { ascending: false });
 
-  if (error) throw appError(500, error.message, "BLOCKS_FETCH_FAILED");
+  if (error) {
+    const { data: fallbackData, error: fallbackError } = await supabaseAdmin
+      .from("user_blocks")
+      .select("id, blocked_id, reason, created_at")
+      .eq("blocker_id", blockerId)
+      .order("created_at", { ascending: false });
+
+    if (fallbackError) throw appError(500, fallbackError.message, "BLOCKS_FETCH_FAILED");
+    if (!fallbackData || fallbackData.length === 0) return [];
+
+    const blockedIds = fallbackData.map((b) => b.blocked_id);
+    const { data: profiles } = await supabaseAdmin
+      .from("profiles")
+      .select("id, full_name, avatar_url")
+      .in("id", blockedIds);
+
+    const profileMap = new Map(profiles?.map((p) => [p.id, p]) ?? []);
+    return fallbackData.map((b) => ({
+      ...b,
+      blocked: profileMap.get(b.blocked_id) ?? null,
+    }));
+  }
   return data ?? [];
 }
 
