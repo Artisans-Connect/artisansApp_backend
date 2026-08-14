@@ -30,6 +30,7 @@ const subcategoryPatchSchema = subcategorySchema.partial();
 
 const suspendSchema = z.object({
   reason: z.string().trim().min(3),
+  report_id: z.string().optional().nullable(),
 });
 
 function validationError(message: string) {
@@ -300,6 +301,98 @@ export async function suspendAccount(accountId: string, body: unknown) {
     .update({ is_available: false, updated_at: now })
     .eq("id", accountId);
 
+  // Send suspension notification to user
+  try {
+    await supabaseAdmin.from("notifications").insert({
+      user_id: accountId,
+      title: "🚫 Account Suspended",
+      body: `Your CraftMatch account has been suspended by moderation due to policy violation: ${parsed.data.reason}.`,
+      data: { type: "ACCOUNT_SUSPENDED", reason: parsed.data.reason },
+    });
+  } catch (_) {}
+
+  // If tied to a report, update the report
+  if (parsed.data.report_id) {
+    await supabaseAdmin
+      .from("reports")
+      .update({
+        status: "RESOLVED",
+        action_taken: "PERMANENT_BAN",
+        resolution_reason: parsed.data.reason,
+        resolved_at: now,
+        updated_at: now,
+      })
+      .eq("id", parsed.data.report_id);
+
+    await supabaseAdmin.from("report_audit_logs").insert({
+      report_id: parsed.data.report_id,
+      actor_id: null,
+      actor_role: "admin",
+      action: "ACCOUNT_SUSPENDED",
+      new_status: "RESOLVED",
+      notes: `Account ${accountId} suspended by admin: ${parsed.data.reason}`,
+    });
+  }
+
+  return data;
+}
+
+export async function warnAccount(accountId: string, body: unknown) {
+  const schema = z.object({
+    reason: z.string().trim().min(3),
+    report_id: z.string().optional().nullable(),
+  });
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) throw validationError(firstIssue(parsed.error));
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .update({
+      account_status: "warned",
+      suspension_reason: `Official Warning: ${parsed.data.reason}`,
+      updated_at: now,
+    })
+    .eq("id", accountId)
+    .select("id, full_name, account_status, suspended_at, suspension_reason")
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "ADMIN_ACCOUNT_WARN_FAILED");
+  if (!data) throw appError(404, "Account not found", "ACCOUNT_NOT_FOUND");
+
+  // Send official warning notification to user
+  try {
+    await supabaseAdmin.from("notifications").insert({
+      user_id: accountId,
+      title: "⚠️ Official Account Warning",
+      body: `You have received an official policy warning from CraftMatch Moderation: ${parsed.data.reason}. Please maintain fair treatment and conduct.`,
+      data: { type: "ACCOUNT_WARNING", reason: parsed.data.reason },
+    });
+  } catch (_) {}
+
+  // If tied to a report, update the report
+  if (parsed.data.report_id) {
+    await supabaseAdmin
+      .from("reports")
+      .update({
+        status: "RESOLVED",
+        action_taken: "WARNING_ISSUED",
+        resolution_reason: parsed.data.reason,
+        resolved_at: now,
+        updated_at: now,
+      })
+      .eq("id", parsed.data.report_id);
+
+    await supabaseAdmin.from("report_audit_logs").insert({
+      report_id: parsed.data.report_id,
+      actor_id: null,
+      actor_role: "admin",
+      action: "WARNING_ISSUED",
+      new_status: "RESOLVED",
+      notes: `Official warning issued to user ${accountId}: ${parsed.data.reason}`,
+    });
+  }
+
   return data;
 }
 
@@ -320,6 +413,53 @@ export async function reactivateAccount(accountId: string) {
   if (error) throw appError(500, error.message, "ADMIN_ACCOUNT_REACTIVATE_FAILED");
   if (!data) throw appError(404, "Account not found", "ACCOUNT_NOT_FOUND");
   return data;
+}
+
+export async function getBlockedAndReportedAccounts() {
+  const [{ data: accounts, error: accountsError }, { data: reports, error: reportsError }] = await Promise.all([
+    supabaseAdmin
+      .from("profiles")
+      .select("id, full_name, phone, signup_type, last_active_mode, avatar_url, account_status, suspended_at, suspension_reason, created_at, updated_at, workers(id, is_available, is_verified, rating, total_jobs)")
+      .in("account_status", ["suspended", "warned"])
+      .order("updated_at", { ascending: false }),
+    supabaseAdmin
+      .from("reports")
+      .select("id, ticket_number, category, description, priority, status, is_emergency, action_taken, resolution_reason, reporter_id, reported_id, booking_id, created_at, updated_at")
+      .order("created_at", { ascending: false })
+      .limit(150),
+  ]);
+
+  if (accountsError) throw appError(500, accountsError.message, "FETCH_BLOCKED_ACCOUNTS_FAILED");
+  if (reportsError) throw appError(500, reportsError.message, "FETCH_REPORTS_FAILED");
+
+  const reportList = reports ?? [];
+  const profileIds = Array.from(
+    new Set(
+      reportList
+        .flatMap((r) => [r.reporter_id, r.reported_id])
+        .filter((id): id is string => Boolean(id))
+    )
+  );
+
+  const { data: profiles } = profileIds.length > 0
+    ? await supabaseAdmin
+        .from("profiles")
+        .select("id, full_name, phone, avatar_url, signup_type, last_active_mode, account_status, workers(id, is_verified, rating)")
+        .in("id", profileIds)
+    : { data: [] };
+
+  const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
+
+  const enrichedReports = reportList.map((r) => ({
+    ...r,
+    reporter: r.reporter_id ? profileMap.get(r.reporter_id) ?? null : null,
+    reported: r.reported_id ? profileMap.get(r.reported_id) ?? null : null,
+  }));
+
+  return {
+    blockedAccounts: accounts ?? [],
+    reports: enrichedReports,
+  };
 }
 
 export async function getDashboardStats() {

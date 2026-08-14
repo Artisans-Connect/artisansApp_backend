@@ -95,10 +95,26 @@ router.patch(
 );
 
 router.patch(
+  "/accounts/:id/warn",
+  catchAsync(async (req: Request, res: Response) => {
+    const account = await adminService.warnAccount(paramId(req.params.id), req.body);
+    res.status(200).json({ success: true, data: account });
+  }),
+);
+
+router.patch(
   "/accounts/:id/reactivate",
   catchAsync(async (req: Request, res: Response) => {
     const account = await adminService.reactivateAccount(paramId(req.params.id));
     res.status(200).json({ success: true, data: account });
+  }),
+);
+
+router.get(
+  "/blocked-and-reported",
+  catchAsync(async (_req: Request, res: Response) => {
+    const result = await adminService.getBlockedAndReportedAccounts();
+    res.status(200).json({ success: true, data: result });
   }),
 );
 
