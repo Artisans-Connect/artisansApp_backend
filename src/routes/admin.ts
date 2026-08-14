@@ -4,10 +4,19 @@ import { catchAsync } from "../utils/catchAsync";
 import { paramId } from "../utils/routeParams";
 import * as adminService from "../services/adminService";
 import * as reportsService from "../services/reportsService";
+import * as notificationsService from "../services/notificationsService";
 
 const router = Router();
 
 router.use(requirePortalAdmin);
+
+router.post(
+  "/broadcast-notification",
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await notificationsService.broadcastNotification(req.body);
+    res.status(201).json({ success: true, data: result });
+  }),
+);
 
 router.get(
   "/dashboard-stats",
