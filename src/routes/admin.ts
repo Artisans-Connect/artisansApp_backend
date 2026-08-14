@@ -10,6 +10,14 @@ const router = Router();
 router.use(requirePortalAdmin);
 
 router.get(
+  "/dashboard-stats",
+  catchAsync(async (_req: Request, res: Response) => {
+    const stats = await adminService.getDashboardStats();
+    res.status(200).json({ success: true, data: stats });
+  }),
+);
+
+router.get(
   "/categories",
   catchAsync(async (_req: Request, res: Response) => {
     const categories = await adminService.listAdminCategories();

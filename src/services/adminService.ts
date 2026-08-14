@@ -321,3 +321,50 @@ export async function reactivateAccount(accountId: string) {
   if (!data) throw appError(404, "Account not found", "ACCOUNT_NOT_FOUND");
   return data;
 }
+
+export async function getDashboardStats() {
+  const [
+    { data: escrows },
+    { data: jobs },
+    { data: workers },
+    { data: profiles },
+    { data: walletTx },
+  ] = await Promise.all([
+    supabaseAdmin.from("job_escrow_balances").select("amount, status, platform_fee_amount"),
+    supabaseAdmin.from("jobs").select("id, status"),
+    supabaseAdmin.from("workers").select("id, is_verified"),
+    supabaseAdmin.from("profiles").select("id, account_status"),
+    supabaseAdmin.from("wallet_transactions").select("id, amount, transaction_type, created_at").order("created_at", { ascending: false }).limit(5),
+  ]);
+
+  const escrowLocked = (escrows ?? [])
+    .filter((e) => e.status === "locked")
+    .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+  const platformFees = (escrows ?? [])
+    .reduce((sum, e) => sum + (Number(e.platform_fee_amount) || 0), 0);
+
+  const jobCounts = {
+    total: (jobs ?? []).length,
+    active: (jobs ?? []).filter((j) => ["posted", "matching", "negotiating", "in_progress"].includes(j.status)).length,
+    completed: (jobs ?? []).filter((j) => j.status === "completed").length,
+    cancelled: (jobs ?? []).filter((j) => j.status === "cancelled").length,
+  };
+
+  const userCounts = {
+    totalAccounts: (profiles ?? []).length,
+    suspendedAccounts: (profiles ?? []).filter((p) => p.account_status === "suspended").length,
+    totalWorkers: (workers ?? []).length,
+    verifiedWorkers: (workers ?? []).filter((w) => w.is_verified).length,
+  };
+
+  return {
+    escrow: {
+      total_locked: escrowLocked,
+      platform_fees: platformFees,
+    },
+    jobs: jobCounts,
+    users: userCounts,
+    recent_transactions: walletTx ?? [],
+  };
+}
