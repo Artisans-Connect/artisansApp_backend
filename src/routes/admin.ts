@@ -102,6 +102,14 @@ router.patch(
   }),
 );
 
+router.patch(
+  "/accounts/:id/tier",
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await adminService.updateAccountVerificationTier(paramId(req.params.id), req.body);
+    res.status(200).json({ success: true, data: result });
+  }),
+);
+
 // TRUST & SAFETY MODERATION DASHBOARD ENDPOINTS
 router.get(
   "/reports",

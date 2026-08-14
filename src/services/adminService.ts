@@ -368,3 +368,43 @@ export async function getDashboardStats() {
     recent_transactions: walletTx ?? [],
   };
 }
+
+export async function updateAccountVerificationTier(accountId: string, body: unknown) {
+  const schema = z.object({
+    verification_level: z.enum(["identity", "professional", "master"]),
+    is_verified: z.boolean().default(true),
+  });
+
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) throw validationError(firstIssue(parsed.error));
+
+  const now = new Date().toISOString();
+
+  const { data: worker, error: workerError } = await supabaseAdmin
+    .from("workers")
+    .update({
+      is_verified: parsed.data.is_verified,
+      updated_at: now,
+    })
+    .eq("id", accountId)
+    .select("id, is_verified, rating")
+    .maybeSingle();
+
+  if (workerError) throw appError(500, workerError.message, "WORKER_TIER_UPDATE_FAILED");
+
+  await supabaseAdmin
+    .from("worker_verifications")
+    .update({
+      verification_level: parsed.data.verification_level,
+      status: parsed.data.is_verified ? "approved" : "rejected",
+      reviewed_at: now,
+    })
+    .eq("worker_id", accountId);
+
+  return {
+    accountId,
+    verification_level: parsed.data.verification_level,
+    is_verified: parsed.data.is_verified,
+    worker: worker ?? null,
+  };
+}
