@@ -29,11 +29,15 @@ src/
 
 ## Key Services
 
-- **`matchingService`**: Implements the multi-factor Haversine matching algorithm and multi-round dispatch logic.
-- **`jobsService`**: Manages job lifecycle (creation, cancellation, completion).
-- **`workersService`**: Handles worker location, availability, and job acceptance.
-- **`notifyService`**: Manages FCM push notifications for various platform events.
-- **`profilesService`**: Manages user profiles and worker-specific data.
+- **`matchingService` & `recommendationEngine`**: Implements multi-factor Haversine spatial matching ($[5, 10, 20, 35]\text{ km}$ concentric ladder), live min-max normalization, response rate scoring, and new-artisan fairness slot injection.
+- **`jobsService` & `jobLifecycle`**: Manages the 13-state job transaction lifecycle, idempotency key checks, and atomic worker assignment locks (`one_active_worker_job_per_worker`).
+- **`negotiationEngine`**: Manages real-time protected price bargaining between client and worker, masking phone numbers until quote acceptance.
+- **`settlementService` & `extraChargeService`**: Coordinates additive on-site extra charges (+GH₵ 30), 20% booking escrow deposits, and 90/10 split settlement calculations.
+- **`autoReleaseService` & `walletService`**: Handles double-entry user wallet ledgers, escrow balances, and automated 48-hour escrow payout auto-releases.
+- **`verificationService`**: Generates 32-byte cryptographic handoff tokens, processes Ghana Card identity uploads, and records administrative audit logs.
+- **`smartSearchService`**: Natural-language intent extraction for 50+ local Ghanaian trade aliases via Gemini 3.5 Flash AI with regex fallback.
+- **`notifyService` & `notificationPayloads`**: Dispatches role-aware FCM push notifications and Supabase Realtime channel updates.
+- **`profilesService` & `workersService`**: Manages user profiles, dual-role ambient switching, worker availability, and GPS location freshness.
 
 ## Getting Started
 
