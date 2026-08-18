@@ -208,36 +208,79 @@ export async function unblockUser(blockerId: string, blockedId: string) {
   return { success: true, message: "User unblocked successfully" };
 }
 
-export async function listUserBlocks(blockerId: string) {
-  const { data, error } = await supabaseAdmin
-    .from("user_blocks")
-    .select("id, blocked_id, reason, created_at, blocked:profiles!user_blocks_blocked_id_fkey(id, full_name, avatar_url)")
-    .eq("blocker_id", blockerId)
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    const { data: fallbackData, error: fallbackError } = await supabaseAdmin
+export async function listUserBlocks(blockerId: string, filterRole?: string) {
+  // 1. Fetch personal blocks if available
+  let personalBlocks: Array<{ id: string; blocked_id: string; reason: string | null; created_at: string }> = [];
+  try {
+    const { data: userBlockData, error } = await supabaseAdmin
       .from("user_blocks")
       .select("id, blocked_id, reason, created_at")
       .eq("blocker_id", blockerId)
       .order("created_at", { ascending: false });
 
-    if (fallbackError) throw appError(500, fallbackError.message, "BLOCKS_FETCH_FAILED");
-    if (!fallbackData || fallbackData.length === 0) return [];
+    if (!error && userBlockData) {
+      personalBlocks = userBlockData;
+    }
+  } catch (_) {}
 
-    const blockedIds = fallbackData.map((b) => b.blocked_id);
-    const { data: profiles } = await supabaseAdmin
-      .from("profiles")
-      .select("id, full_name, avatar_url")
-      .in("id", blockedIds);
+  // 2. Fetch platform suspended accounts
+  let platformSuspendedQuery = supabaseAdmin
+    .from("profiles")
+    .select("id, full_name, phone, avatar_url, signup_type, last_active_mode, account_status, suspended_at, suspension_reason, created_at, updated_at, workers(id, skills, rating, total_jobs, is_verified, service_areas)")
+    .in("account_status", ["suspended", "warned"])
+    .order("updated_at", { ascending: false });
 
-    const profileMap = new Map(profiles?.map((p) => [p.id, p]) ?? []);
-    return fallbackData.map((b) => ({
-      ...b,
-      blocked: profileMap.get(b.blocked_id) ?? null,
-    }));
+  if (filterRole === "worker") {
+    platformSuspendedQuery = platformSuspendedQuery.or("signup_type.eq.worker,last_active_mode.eq.worker");
+  } else if (filterRole === "client") {
+    platformSuspendedQuery = platformSuspendedQuery.or("signup_type.eq.client,last_active_mode.eq.client");
   }
-  return data ?? [];
+
+  const { data: suspendedProfiles } = await platformSuspendedQuery;
+
+  // 3. Resolve personal blocks profiles
+  const personalBlockedIds = personalBlocks.map((b) => b.blocked_id);
+  const { data: personalProfiles } = personalBlockedIds.length > 0
+    ? await supabaseAdmin
+        .from("profiles")
+        .select("id, full_name, phone, avatar_url, signup_type, last_active_mode, account_status, suspended_at, suspension_reason, created_at, updated_at, workers(id, skills, rating, total_jobs, is_verified, service_areas)")
+        .in("id", personalBlockedIds)
+    : { data: [] };
+
+  const personalProfileMap = new Map((personalProfiles ?? []).map((p) => [p.id, p]));
+
+  const personalList = personalBlocks
+    .map((b) => {
+      const profile = personalProfileMap.get(b.blocked_id);
+      return {
+        id: b.id,
+        blocked_id: b.blocked_id,
+        reason: b.reason || profile?.suspension_reason || "Blocked from user interactions",
+        created_at: b.created_at,
+        is_personal_block: true,
+        blocked: profile ?? null,
+      };
+    })
+    .filter((item) => {
+      if (!filterRole) return true;
+      const role = item.blocked?.signup_type ?? item.blocked?.last_active_mode ?? "client";
+      return role === filterRole;
+    });
+
+  // Combine with platform suspended accounts (avoiding duplicate IDs)
+  const existingBlockedIds = new Set(personalList.map((p) => p.blocked_id));
+  const platformList = (suspendedProfiles ?? [])
+    .filter((p) => !existingBlockedIds.has(p.id))
+    .map((p) => ({
+      id: `platform-${p.id}`,
+      blocked_id: p.id,
+      reason: p.suspension_reason || "Suspended by platform moderation policy",
+      created_at: p.suspended_at || p.updated_at || p.created_at,
+      is_personal_block: false,
+      blocked: p,
+    }));
+
+  return [...personalList, ...platformList];
 }
 
 export async function checkBlockStatus(userId1: string, userId2: string) {

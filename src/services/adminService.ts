@@ -430,9 +430,7 @@ export async function getBlockedAndReportedAccounts() {
   ]);
 
   if (accountsError) throw appError(500, accountsError.message, "FETCH_BLOCKED_ACCOUNTS_FAILED");
-  if (reportsError) throw appError(500, reportsError.message, "FETCH_REPORTS_FAILED");
-
-  const reportList = reports ?? [];
+  const reportList = (!reportsError && reports) ? reports : [];
   const profileIds = Array.from(
     new Set(
       reportList

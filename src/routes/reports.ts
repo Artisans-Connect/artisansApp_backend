@@ -59,7 +59,8 @@ router.get(
   "/blocks",
   catchAsync(async (req: Request, res: Response) => {
     const blockerId = req.user!.id;
-    const blocks = await reportsService.listUserBlocks(blockerId);
+    const role = (req.query.role as string)?.trim() || undefined;
+    const blocks = await reportsService.listUserBlocks(blockerId, role);
     res.status(200).json({ success: true, data: blocks });
   })
 );
