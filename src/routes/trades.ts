@@ -16,8 +16,9 @@ router.get(
   catchAsync(async (_req: Request, res: Response) => {
     const { data, error } = await supabaseAdmin
       .from("subcategories")
-      .select("name, categories(icon_name)")
+      .select("name, categories!inner(icon_name, is_active)")
       .eq("is_active", true)
+      .eq("categories.is_active", true)
       .order("name", { ascending: true });
 
     if (error) {
@@ -46,8 +47,9 @@ router.post(
 
     const { data, error } = await supabaseAdmin
       .from("subcategories")
-      .select("name")
-      .eq("is_active", true);
+      .select("name, categories!inner(is_active)")
+      .eq("is_active", true)
+      .eq("categories.is_active", true);
 
     if (error) {
       throw appError(500, error.message, "DATABASE_ERROR");

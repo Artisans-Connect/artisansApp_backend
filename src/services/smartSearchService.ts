@@ -222,15 +222,10 @@ async function parseWithGemini(
           .join(", ");
         return `- ${category.name ?? category.slug} (slug: ${category.slug})${subcategories ? `: ${subcategories}` : ""}`;
       }).join("\n")
-    : `- Construction & Building (slug: construction_building): Mason, Carpenter, Tiler, Painter, Steel Bender, Welder / Metal Fabricator, Ceiling Installer, Glass Worker, Roofer, Paver / Landscaper
+    : `- Plumbing & Water Systems (slug: plumbing_water): Plumber, Borehole / Pump Technician, Drainage Worker, Sanitary Installer
 - Electrical & Power (slug: electrical_power): Electrician, Solar Technician, Appliance Electrician, Generator Technician, CCTV / Security Installer
-- Plumbing & Water Systems (slug: plumbing_water): Plumber, Borehole / Pump Technician, Drainage Worker, Sanitary Installer
 - Auto & Mechanical Repairs (slug: auto_mechanical): Auto Mechanic, Auto Electrician, Vulcanizer, Sprayer / Auto Body Worker, Motorcycle Mechanic, Heavy Equipment Mechanic
-- Home Repairs & Maintenance (slug: home_repairs): General Handyman, Furniture Repairer, Door/Window Repairer, Pest Control Worker, Cleaner, Gardener
-- Beauty, Fashion & Personal Services (slug: beauty_fashion): Hairdresser, Barber, Makeup Artist, Tailor / Dressmaker, Shoemaker / Cobbler, Bead Maker, Milliner
-- Electronics, Phones & IT Repairs (slug: electronics_it): Phone Repairer, Laptop Technician, TV Technician, Sound System Technician, Printer/Photocopier Technician
-- Hospitality & Event Services (slug: hospitality_events): Caterer, Baker, Decorator, Photographer, Videographer, DJ / Sound Provider, Canopy/Chair Rental
-- Arts, Craft & Traditional Work (slug: arts_crafts): Potter, Weaver, Wood Carver, Drum Maker, Goldsmith / Jeweller, Brass Smith, Signwriter / Printer`;
+- Carpentry & Woodwork (slug: construction_building): Carpenter, Roofing woodwork, Doors, Cabinets, Formwork, Furniture repair`;
 
   const prompt = `You are an assistant for CraftMatch, a platform that connects clients to local artisans and service workers.
 Your task is to parse a natural language query — which could be a client's search intent (e.g., "fix my sink", "need a painter") OR an artisan's described skills/trades (e.g., "I do house wiring and fix generators", "cabinet maker") — and output a structured JSON representing the matched categories and a refined summary of the query.
