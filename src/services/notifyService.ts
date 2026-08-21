@@ -91,7 +91,7 @@ export async function sendToUser(userId: string, payload: PushPayload): Promise<
 
 export async function notifyWorkerNewJob(
   workerId: string,
-  job: { id: string; title: string; address_label: string },
+  job: { id: string; title: string; address_label: string; job_mode?: string },
 ): Promise<void> {
   await sendToUser(workerId, {
     title: "New job request",
@@ -100,6 +100,7 @@ export async function notifyWorkerNewJob(
       jobId: job.id,
       jobTitle: job.title,
       roleTarget: "worker",
+      jobMode: job.job_mode,
     }),
   });
 }
