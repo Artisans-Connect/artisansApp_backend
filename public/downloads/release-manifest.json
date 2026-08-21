@@ -1,0 +1,56 @@
+{
+  "appName": "CraftMatch",
+  "latestVersion": "1.0.1",
+  "updatedAt": "2026-08-21T18:53:47.023Z",
+  "releaseNotes": "Automated test webhook",
+  "links": [
+    {
+      "platform": "android",
+      "label": "Android APK",
+      "href": "https://github.com/Artisans-Connect/artisansApp_frontend/releases/latest/download/CraftMatch-latest.apk",
+      "version": "1.0.1",
+      "fileSize": "38.5 MB",
+      "fileSizeBytes": 40370176,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "minRequirement": "Android 8.0 or newer",
+      "available": true,
+      "external": false
+    },
+    {
+      "platform": "web",
+      "label": "Web PWA",
+      "href": "https://artisans-app-frontend.vercel.app/",
+      "version": "1.0.0",
+      "minRequirement": "Latest Chrome, Edge, Safari, or Firefox",
+      "available": true,
+      "external": true
+    },
+    {
+      "platform": "ios",
+      "label": "iPhone",
+      "href": "",
+      "version": "1.0.0",
+      "minRequirement": "iOS 15 or newer",
+      "available": false,
+      "external": true
+    },
+    {
+      "platform": "windows",
+      "label": "Windows",
+      "href": "",
+      "version": "1.0.0",
+      "minRequirement": "Windows 10 or newer",
+      "available": false,
+      "external": true
+    },
+    {
+      "platform": "macos",
+      "label": "macOS",
+      "href": "",
+      "version": "1.0.0",
+      "minRequirement": "macOS 12 or newer",
+      "available": false,
+      "external": true
+    }
+  ]
+}

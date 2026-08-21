@@ -112,6 +112,7 @@ export async function calculateSettlement(jobId: string) {
   return {
     job_id: jobId,
     initial_escrow: initialEscrow,
+    urgency_premium: urgencyPremium,
     extra_charges: formattedExtraCharges,
     pending_extra_charges: formattedPendingCharges,
     total_extra_charges: totalExtra,

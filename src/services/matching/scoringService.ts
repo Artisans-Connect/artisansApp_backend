@@ -12,6 +12,7 @@ import {
   type RecommendationCandidate,
 } from "../recommendationEngine";
 import { RESPONSIVE_DISPATCH_STATUSES, WorkerRow, DispatchStatsRow, WorkerRecommendationCandidate } from "./matchingTypes";
+import { fetchBlockedCounterpartIds } from "../blocksService";
 
 export async function fetchCategoryLabel(categoryId: string): Promise<string> {
   const { data } = await supabaseAdmin.from("categories").select("name, slug").eq("id", categoryId).maybeSingle();
@@ -34,12 +35,15 @@ export async function fetchWorkerIdsWithBlockingAssignments(): Promise<Set<strin
 }
 
 export async function fetchCandidateWorkers(
-  job: { location_lat: number; location_lng: number; category_id: string },
+  job: { location_lat: number; location_lng: number; category_id: string; client_id?: string },
   excludeIds: Set<string>,
   radiusKm: number,
 ): Promise<WorkerRow[]> {
-  const categoryKey = await fetchCategoryLabel(job.category_id);
-  const occupiedWorkerIds = await fetchWorkerIdsWithBlockingAssignments();
+  const [categoryKey, occupiedWorkerIds, blockedWorkerIds] = await Promise.all([
+    fetchCategoryLabel(job.category_id),
+    fetchWorkerIdsWithBlockingAssignments(),
+    job.client_id ? fetchBlockedCounterpartIds(job.client_id) : Promise.resolve(new Set<string>()),
+  ]);
 
   const { data, error } = await supabaseAdmin
     .from("workers")
@@ -51,6 +55,7 @@ export async function fetchCandidateWorkers(
   return (data ?? []).filter((worker) => {
     if (excludeIds.has(worker.id)) return false;
     if (occupiedWorkerIds.has(worker.id)) return false;
+    if (blockedWorkerIds.has(worker.id)) return false;
     if (worker.current_lat == null || worker.current_lng == null) return false;
     if (!isLocationFresh(worker.location_at)) return false;
     if (categoryKey && !workerHasCategorySkill(worker.skills, categoryKey)) {

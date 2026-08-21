@@ -2,6 +2,7 @@ import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
 import { sendMessageSchema } from "../validators/chat.validator";
 import * as notifyService from "./notifyService";
+import { fetchBlockedCounterpartIds, isBlockedBetween } from "./blocksService";
 
 async function assertJobParticipant(userId: string, jobId: string) {
   const { data: job } = await supabaseAdmin
@@ -50,6 +51,12 @@ export async function createDirectConversation(userId: string, body: unknown) {
     .maybeSingle();
   if (!worker) throw appError(404, "Worker not found", "WORKER_NOT_FOUND");
 
+  // Mutual invisibility: a block in either direction prevents opening a new
+  // conversation with the counterpart.
+  if (await isBlockedBetween(userId, workerId)) {
+    throw appError(403, "You can't start a conversation with this user.", "BLOCKED");
+  }
+
   // Prevent duplicates by checking first (in case unique constraint is missing)
   const { data: existingList } = await supabaseAdmin
     .from("direct_conversations")
@@ -81,6 +88,8 @@ export async function createDirectConversation(userId: string, body: unknown) {
 }
 
 export async function listConversations(userId: string) {
+  const blockedCounterparts = await fetchBlockedCounterpartIds(userId);
+
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select(
@@ -231,10 +240,12 @@ export async function listConversations(userId: string) {
     }
   }
 
-  const result = Array.from(uniqueConversations.values()).map((c) => ({
-    ...c,
-    unread_count: unreadMap.get(c.id) ?? 0,
-  }));
+  const result = Array.from(uniqueConversations.values())
+    .filter((c) => !blockedCounterparts.has(c.counterpart_id))
+    .map((c) => ({
+      ...c,
+      unread_count: unreadMap.get(c.id) ?? 0,
+    }));
 
   return result.sort(
     (a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime(),
@@ -274,6 +285,17 @@ export async function sendMessage(userId: string, conversationId: string, body: 
   }
 
   const conversation = await assertConversationParticipant(userId, conversationId);
+
+  // Mutual invisibility: once either party blocks the other, the thread freezes
+  // for both — no new messages in either direction (job or direct).
+  const counterpartId =
+    conversation.conversation.client_id === userId
+      ? conversation.conversation.worker_id
+      : conversation.conversation.client_id;
+  if (counterpartId && (await isBlockedBetween(userId, counterpartId))) {
+    throw appError(403, "You can't message this user.", "BLOCKED");
+  }
+
   if (parsed.data.client_message_id) {
     let existingQuery = supabaseAdmin
       .from("messages")

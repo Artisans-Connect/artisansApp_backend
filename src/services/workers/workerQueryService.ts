@@ -7,6 +7,7 @@ import { workerHasCategorySkill } from "../../utils/skillMatch";
 import { nearbyWorkersSchema } from "../../validators/workers.validator";
 import * as matchingService from "../matchingService";
 import { quotePreviewForWorker } from "../workerQuoteService";
+import { fetchBlockedCounterpartIds } from "../blocksService";
 
 type WorkerStatsReview = {
   id: string;
@@ -35,7 +36,7 @@ type NearbyWorker = {
   profiles?: unknown;
 };
 
-export async function getNearby(query: unknown) {
+export async function getNearby(query: unknown, viewerId?: string) {
   const parsed = nearbyWorkersSchema.safeParse(query);
   if (!parsed.success) {
     throw appError(400, parsed.error.issues[0]?.message ?? "Invalid nearby query", "VALIDATION_ERROR");
@@ -73,6 +74,15 @@ export async function getNearby(query: unknown) {
 
   let result: NearbyWorker[] = (workers ?? []) as NearbyWorker[];
 
+  // Mutual invisibility: hide workers the viewer has blocked or who have blocked
+  // the viewer from discovery. Fail-safe (empty set on error) inside the helper.
+  if (viewerId) {
+    const blocked = await fetchBlockedCounterpartIds(viewerId);
+    if (blocked.size > 0) {
+      result = result.filter((w) => !blocked.has(w.id));
+    }
+  }
+
   if (categoryKey) {
     result = result.filter((w) => workerHasCategorySkill(w.skills, categoryKey));
   }
@@ -104,7 +114,7 @@ export async function getHistory(userId: string, limit?: number, offset?: number
   let query = supabaseAdmin
     .from("jobs")
     .select(
-      "id, title, description, status, budget_fixed, budget_min, budget_max, budget_type, address_label, location_lat, location_lng, updated_at, cancelled_by, cancelled_reason, cancelled_at, categories(name, icon_name, color_hex), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)",
+      "id, title, description, status, job_mode, budget_fixed, budget_min, budget_max, budget_type, address_label, location_lat, location_lng, updated_at, cancelled_by, cancelled_reason, cancelled_at, categories(name, icon_name, color_hex), client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)",
     )
     .eq("worker_id", userId)
     .in("status", [JOB_STATUS.COMPLETED, JOB_STATUS.CANCELLED])

@@ -202,6 +202,7 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
       id: job.id,
       title: job.title,
       address_label: job.address_label,
+      job_mode: job.job_mode,
     });
   }
 

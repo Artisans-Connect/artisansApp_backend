@@ -32,6 +32,7 @@ paths:
                 category:
                   type: string
                   enum:
+                    - UNFAIR_TREATMENT
                     - HARASSMENT
                     - SCAM_FRAUD
                     - FAKE_IDENTITY

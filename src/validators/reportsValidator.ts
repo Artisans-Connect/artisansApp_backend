@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const REPORT_CATEGORIES = [
+  "UNFAIR_TREATMENT",
   "HARASSMENT",
   "SCAM_FRAUD",
   "FAKE_IDENTITY",

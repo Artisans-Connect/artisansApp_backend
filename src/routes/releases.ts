@@ -1,149 +1,164 @@
 import { Router, type Request, type Response } from "express";
-import fs from "node:fs";
+import multer from "multer";
+import { requirePortalAdmin } from "../middleware/admin";
+import { catchAsync } from "../utils/catchAsync";
+import * as releaseService from "../services/releaseService";
+import type { ReleasePlatform } from "../services/releaseService";
 
 const router = Router();
 
-type ReleasePlatform = "android" | "ios" | "windows" | "macos" | "web";
-
-interface AppReleaseLink {
-  platform: ReleasePlatform;
-  label: string;
-  href: string;
-  version?: string;
-  minRequirement?: string;
-  available: boolean;
-  external?: boolean;
-}
-
-interface AppReleaseManifest {
-  appName?: string;
-  latestVersion?: string;
-  updatedAt?: string;
-  links?: Partial<AppReleaseLink>[];
-}
-
-interface PlatformConfig {
-  platform: ReleasePlatform;
-  label: string;
-  envKey: string;
-  minRequirement: string;
-  external?: boolean;
-}
-
-const platformConfigs: PlatformConfig[] = [
-  {
-    platform: "android",
-    label: "Android APK",
-    envKey: "CRAFTMATCH_ANDROID_DOWNLOAD_URL",
-    minRequirement: "Android 8.0 or newer",
-    external: true,
-  },
-  {
-    platform: "ios",
-    label: "iPhone",
-    envKey: "CRAFTMATCH_IOS_DOWNLOAD_URL",
-    minRequirement: "iOS 15 or newer",
-    external: true,
-  },
-  {
-    platform: "windows",
-    label: "Windows",
-    envKey: "CRAFTMATCH_WINDOWS_DOWNLOAD_URL",
-    minRequirement: "Windows 10 or newer",
-    external: true,
-  },
-  {
-    platform: "macos",
-    label: "macOS",
-    envKey: "CRAFTMATCH_MACOS_DOWNLOAD_URL",
-    minRequirement: "macOS 12 or newer",
-    external: true,
-  },
-  {
-    platform: "web",
-    label: "Web PWA",
-    envKey: "CRAFTMATCH_WEB_APP_URL",
-    minRequirement: "Latest Chrome, Edge, Safari, or Firefox",
-    external: true,
-  },
-];
-
-function releaseLink(config: PlatformConfig): AppReleaseLink {
-  const href =
-    process.env[config.envKey]?.trim() ||
-    (config.platform === "web" ? "https://artisans-app-frontend.vercel.app/" : "");
-  return {
-    platform: config.platform,
-    label: config.label,
-    href,
-    version: process.env.CRAFTMATCH_APP_VERSION?.trim() || "1.0.0",
-    minRequirement: config.minRequirement,
-    available: href.length > 0,
-    external: config.external,
-  };
-}
-
-function envReleaseLinks(): AppReleaseLink[] {
-  return platformConfigs.map(releaseLink);
-}
-
-function readManifest(): AppReleaseManifest | null {
-  try {
-    const manifestJson = process.env.CRAFTMATCH_RELEASE_MANIFEST_JSON?.trim();
-    if (manifestJson) return JSON.parse(manifestJson) as AppReleaseManifest;
-
-    const manifestPath = process.env.CRAFTMATCH_RELEASE_MANIFEST_PATH?.trim();
-    if (!manifestPath || !fs.existsSync(manifestPath)) return null;
-
-    return JSON.parse(fs.readFileSync(manifestPath, "utf8")) as AppReleaseManifest;
-  } catch {
-    return null;
-  }
-}
-
-function mergeManifestLinks(manifestLinks: Partial<AppReleaseLink>[] | undefined): AppReleaseLink[] {
-  const fallbackLinks = envReleaseLinks();
-  if (!manifestLinks?.length) return fallbackLinks;
-
-  const manifestByPlatform = new Map(
-    manifestLinks
-      .filter((link): link is Partial<AppReleaseLink> & { platform: ReleasePlatform } => Boolean(link.platform))
-      .map((link) => [link.platform, link]),
-  );
-
-  return fallbackLinks.map((fallback) => {
-    const manifest = manifestByPlatform.get(fallback.platform);
-    if (!manifest) return fallback;
-    const href = manifest.href?.trim() ?? fallback.href;
-    return {
-      ...fallback,
-      ...manifest,
-      href,
-      available: manifest.available ?? href.length > 0,
-    };
-  });
-}
-
-router.get("/app", (_req: Request, res: Response) => {
-  const manifest = readManifest();
-  const latestVersion =
-    manifest?.latestVersion?.trim() || process.env.CRAFTMATCH_APP_VERSION?.trim() || "1.0.0";
-
-  res.status(200).json({
-    success: true,
-    data: {
-      appName: manifest?.appName?.trim() || "CraftMatch",
-      latestVersion,
-      updatedAt:
-        manifest?.updatedAt?.trim() ||
-        process.env.CRAFTMATCH_RELEASE_UPDATED_AT?.trim() ||
-        new Date().toISOString(),
-      links: mergeManifestLinks(manifest?.links).map((link) => ({
-        ...link,
-        version: link.version || latestVersion,
-      })),
-    },
-  });
+const upload = multer({
+  limits: { fileSize: 200 * 1024 * 1024 }, // Allow up to 200MB APK uploads
+  storage: multer.memoryStorage(),
 });
+
+/**
+ * Public Endpoint: Get active release manifest & platform links
+ */
+router.get(
+  "/app",
+  catchAsync(async (_req: Request, res: Response) => {
+    const manifest = releaseService.getReleaseManifest();
+    res.status(200).json({
+      success: true,
+      data: manifest,
+    });
+  }),
+);
+
+/**
+ * Public Endpoint: Direct download / streaming for a platform (e.g. /download/android)
+ */
+router.get(
+  "/download/:platform",
+  catchAsync(async (req: Request, res: Response) => {
+    const rawPlatform = Array.isArray(req.params.platform) ? req.params.platform[0] : req.params.platform;
+    const platform = (rawPlatform || "android").toLowerCase() as ReleasePlatform;
+    const download = releaseService.resolveDownloadTarget(platform);
+
+    if (download.type === "file") {
+      res.setHeader("Content-Type", "application/vnd.android.package-archive");
+      res.setHeader("Content-Disposition", `attachment; filename="${download.filename}"`);
+      if (download.fileSizeBytes) {
+        res.setHeader("Content-Length", download.fileSizeBytes);
+      }
+      return res.sendFile(download.target);
+    }
+
+    // Redirect to CDN / external download URL
+    return res.redirect(302, download.target);
+  }),
+);
+
+/**
+ * Public Endpoint: Shortcut for latest Android APK download
+ */
+router.get(
+  "/download/latest",
+  catchAsync(async (_req: Request, res: Response) => {
+    const download = releaseService.resolveDownloadTarget("android");
+    if (download.type === "file") {
+      res.setHeader("Content-Type", "application/vnd.android.package-archive");
+      res.setHeader("Content-Disposition", `attachment; filename="${download.filename}"`);
+      if (download.fileSizeBytes) {
+        res.setHeader("Content-Length", download.fileSizeBytes);
+      }
+      return res.sendFile(download.target);
+    }
+    return res.redirect(302, download.target);
+  }),
+);
+
+/**
+ * Public/Protected Webhook: Receives build completion notifications from GitHub Actions
+ */
+router.post(
+  "/webhook",
+  catchAsync(async (req: Request, res: Response) => {
+    const adminKey = process.env.VERIFICATION_ADMIN_KEY;
+    const incomingKey = req.headers["x-verification-admin-key"] as string | undefined;
+
+    // Optional verification if admin key is configured
+    if (adminKey && incomingKey && incomingKey !== adminKey) {
+      return res.status(401).json({ success: false, message: "Invalid webhook secret" });
+    }
+
+    const updatedManifest = releaseService.handleBuildWebhook(req.body);
+    res.status(200).json({
+      success: true,
+      message: "Release manifest updated from build webhook",
+      data: updatedManifest,
+    });
+  }),
+);
+
+/**
+ * Admin Endpoint: Trigger GitHub Actions Cloud Build
+ */
+router.post(
+  "/trigger-build",
+  requirePortalAdmin,
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await releaseService.triggerGitHubBuild({
+      version: typeof req.body.version === "string" ? req.body.version : undefined,
+      releaseNotes: typeof req.body.releaseNotes === "string" ? req.body.releaseNotes : undefined,
+      releaseType: req.body.releaseType === "debug" ? "debug" : "release",
+    });
+    res.status(200).json({ success: true, data: result });
+  }),
+);
+
+/**
+ * Admin Endpoint: Query latest GitHub Actions build status
+ */
+router.get(
+  "/build-status",
+  requirePortalAdmin,
+  catchAsync(async (_req: Request, res: Response) => {
+    const status = await releaseService.getLatestBuildStatus();
+    res.status(200).json({ success: true, data: status });
+  }),
+);
+
+/**
+ * Admin Endpoint: Direct drag-and-drop APK upload
+ */
+router.post(
+  "/upload",
+  requirePortalAdmin,
+  upload.single("file"),
+  catchAsync(async (req: Request, res: Response) => {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "No APK file uploaded" });
+    }
+
+    const updated = releaseService.saveUploadedApk(req.file, {
+      version: typeof req.body.version === "string" ? req.body.version : undefined,
+      releaseNotes: typeof req.body.releaseNotes === "string" ? req.body.releaseNotes : undefined,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "APK file uploaded and published to distribution center",
+      data: updated,
+    });
+  }),
+);
+
+/**
+ * Admin Endpoint: Update release manifest links and settings
+ */
+router.put(
+  "/manifest",
+  requirePortalAdmin,
+  catchAsync(async (req: Request, res: Response) => {
+    const updated = releaseService.saveReleaseManifest(req.body);
+    res.status(200).json({
+      success: true,
+      message: "Release settings updated successfully",
+      data: updated,
+    });
+  }),
+);
 
 export default router;

@@ -14,6 +14,7 @@ import {
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
 import * as walletService from "./walletService";
+import { isBlockedBetween } from "./blocksService";
 
 
 const UUID_RE =
@@ -178,6 +179,16 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
     ? JOB_STATUS.MATCHING
     : statusForNewJob(input.job_mode);
 
+  if (input.requested_worker_id) {
+    // A block in either direction makes the pair mutually invisible: a client
+    // must never be able to target a worker they've blocked or who has blocked
+    // them. Applies to scheduled requests too, unlike the busy check below.
+    const blocked = await isBlockedBetween(userId, input.requested_worker_id);
+    if (blocked) {
+      throw appError(403, "This artisan isn't available for direct requests.", "WORKER_UNAVAILABLE");
+    }
+  }
+
   if (input.requested_worker_id && shouldDispatch && input.job_mode !== JOB_MODE.SCHEDULED) {
     // Scheduled requests skip the busy check: being busy now says nothing
     // about availability at the scheduled time.
@@ -236,6 +247,7 @@ export async function createJob(userId: string, body: unknown, idempotencyKeyHea
       id: data.id,
       title: data.title,
       address_label: data.address_label,
+      job_mode: data.job_mode,
     });
   } else if (shouldDispatch) {
     void matchingService.findAndDispatch(data.id, 1);

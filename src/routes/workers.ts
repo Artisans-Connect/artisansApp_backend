@@ -38,7 +38,7 @@ router.get(
   "/nearby",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
-    const workers = await workersService.getNearby(req.query);
+    const workers = await workersService.getNearby(req.query, req.user!.id);
     res.status(200).json({ success: true, data: workers });
   }),
 );
