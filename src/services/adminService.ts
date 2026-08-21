@@ -509,7 +509,7 @@ export async function getDashboardStats() {
 
 export async function updateAccountVerificationTier(accountId: string, body: unknown) {
   const schema = z.object({
-    verification_level: z.enum(["identity", "professional", "master"]),
+    verification_level: z.enum(["identity", "professional", "premium"]),
     is_verified: z.boolean().default(true),
   });
 
@@ -530,7 +530,7 @@ export async function updateAccountVerificationTier(accountId: string, body: unk
 
   if (workerError) throw appError(500, workerError.message, "WORKER_TIER_UPDATE_FAILED");
 
-  await supabaseAdmin
+  const { error: verificationError } = await supabaseAdmin
     .from("worker_verifications")
     .update({
       verification_level: parsed.data.verification_level,
@@ -538,6 +538,9 @@ export async function updateAccountVerificationTier(accountId: string, body: unk
       reviewed_at: now,
     })
     .eq("worker_id", accountId);
+
+  if (verificationError)
+    throw appError(500, verificationError.message, "VERIFICATION_TIER_UPDATE_FAILED");
 
   return {
     accountId,
