@@ -286,6 +286,7 @@ export async function suspendAccount(accountId: string, body: unknown) {
     .update({
       account_status: "suspended",
       suspended_at: now,
+      suspended_until: null,
       suspension_reason: parsed.data.reason,
       updated_at: now,
     })
@@ -403,6 +404,7 @@ export async function reactivateAccount(accountId: string) {
     .update({
       account_status: "active",
       suspended_at: null,
+      suspended_until: null,
       suspension_reason: null,
       updated_at: now,
     })
@@ -457,6 +459,74 @@ export async function getBlockedAndReportedAccounts() {
   return {
     blockedAccounts: accounts ?? [],
     reports: enrichedReports,
+  };
+}
+
+/**
+ * Moderator-only read visibility into user_blocks for a single account.
+ * Returns both directions: who has blocked this user ("blocked_by") and who
+ * this user has blocked ("blocks"). Uses supabaseAdmin because RLS on
+ * user_blocks only exposes rows where the caller is the blocker, so a
+ * service-role read is required to see edges where this user is the blocked
+ * party. Reasons are included deliberately — this is an admin investigation
+ * surface, not a user-facing one. Fails safe (empty lists) on error so the
+ * account drawer still renders.
+ */
+export async function getUserBlockRelationships(userId: string) {
+  const [{ data: blockedByRows, error: blockedByError }, { data: blocksRows, error: blocksError }] =
+    await Promise.all([
+      supabaseAdmin
+        .from("user_blocks")
+        .select("id, blocker_id, reason, created_at")
+        .eq("blocked_id", userId)
+        .order("created_at", { ascending: false }),
+      supabaseAdmin
+        .from("user_blocks")
+        .select("id, blocked_id, reason, created_at")
+        .eq("blocker_id", userId)
+        .order("created_at", { ascending: false }),
+    ]);
+
+  const blockedByList = (!blockedByError && blockedByRows) ? blockedByRows : [];
+  const blocksList = (!blocksError && blocksRows) ? blocksRows : [];
+
+  const counterpartIds = Array.from(
+    new Set(
+      [
+        ...blockedByList.map((r) => r.blocker_id),
+        ...blocksList.map((r) => r.blocked_id),
+      ].filter((id): id is string => Boolean(id))
+    )
+  );
+
+  const { data: profiles } = counterpartIds.length > 0
+    ? await supabaseAdmin
+        .from("profiles")
+        .select("id, full_name, phone, avatar_url, signup_type, account_status")
+        .in("id", counterpartIds)
+    : { data: [] };
+
+  const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
+
+  const blocked_by = blockedByList.map((r) => ({
+    id: r.id,
+    user: r.blocker_id ? profileMap.get(r.blocker_id) ?? null : null,
+    reason: r.reason ?? null,
+    created_at: r.created_at,
+  }));
+
+  const blocks = blocksList.map((r) => ({
+    id: r.id,
+    user: r.blocked_id ? profileMap.get(r.blocked_id) ?? null : null,
+    reason: r.reason ?? null,
+    created_at: r.created_at,
+  }));
+
+  return {
+    blocked_by_count: blocked_by.length,
+    blocks_count: blocks.length,
+    blocked_by,
+    blocks,
   };
 }
 

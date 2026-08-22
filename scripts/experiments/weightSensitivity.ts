@@ -54,7 +54,7 @@ export function runWeightSensitivity(seed: number, scenarios: number, poolSize: 
   const pools = jobs.map((_, i) => makeWorkers(seed + 1000 + i, poolSize));
   const baseTops = pools.map((pool, i) => rankIdsByWeights(pool, jobs[i]!, TRUE_WEIGHTS).slice(0, TOP_K));
 
-  const factors: (keyof Weights)[] = ["distance", "responseRate", "rating"];
+  const factors: (keyof Weights)[] = ["distance", "responseRate", "rating", "reliability"];
 
   // --- OAT ±20% ---
   const oat: SensitivityResult["oat"] = [];
@@ -85,7 +85,7 @@ export function runWeightSensitivity(seed: number, scenarios: number, poolSize: 
   const mcChurns: number[] = [];
   const draws = 200;
   for (let d = 0; d < draws; d++) {
-    const raw = { distance: rng(), responseRate: rng(), rating: rng() };
+    const raw = { distance: rng(), responseRate: rng(), rating: rng(), reliability: rng() };
     const w = normalizeWeights(raw);
     for (let i = 0; i < scenarios; i++) {
       mcChurns.push(topKChurn(pools[i]!, jobs[i]!, baseTops[i]!, w));

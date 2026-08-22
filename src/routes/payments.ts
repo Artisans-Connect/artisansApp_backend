@@ -107,8 +107,8 @@ router.get("/callback", async (req: Request, res: Response) => {
     `;
 
   const descriptionText = isWeb
-    ? "Your deposit has been securely placed in escrow. You can now close this tab or return to the CraftMatch website."
-    : "Your deposit has been securely placed in escrow. You can now close this tab or return to the CraftMatch app.";
+    ? "Your payment has been received. You can now close this tab or return to the CraftMatch website."
+    : "Your payment has been received. You can now close this tab or return to the CraftMatch app.";
 
   // Render a premium success landing page that instructs user to return to app
   res.status(200).send(`

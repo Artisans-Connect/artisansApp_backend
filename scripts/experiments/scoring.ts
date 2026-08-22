@@ -19,12 +19,13 @@ import {
 
 /** The production weights, copied here as the reference point for sweeps. */
 export const TRUE_WEIGHTS = {
-  distance: 0.3212,
-  responseRate: 0.3467,
-  rating: 0.3321,
+  distance: 0.2730,
+  responseRate: 0.2947,
+  rating: 0.2823,
+  reliability: 0.15,
 } as const;
 
-export type Weights = { distance: number; responseRate: number; rating: number };
+export type Weights = { distance: number; responseRate: number; rating: number; reliability: number };
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -61,18 +62,25 @@ export function scoreWith(
   const distanceScore = maxDistanceKm === 0 ? 1 : Math.max(0, 1 - distanceKm / maxDistanceKm);
   const responseRate = clamp01(candidate.responseRate);
   const ratingScore = clamp01(Number(candidate.rating ?? 0) / 5);
+  const reliability = clamp01(candidate.reliability ?? 1);
   return (
     weights.distance * distanceScore +
     weights.responseRate * responseRate +
-    weights.rating * ratingScore
+    weights.rating * ratingScore +
+    weights.reliability * reliability
   );
 }
 
 /** Renormalise a weight vector to sum to 1 (used after OAT perturbation/ablation). */
 export function normalizeWeights(w: Weights): Weights {
-  const sum = w.distance + w.responseRate + w.rating;
-  if (sum === 0) return { distance: 1 / 3, responseRate: 1 / 3, rating: 1 / 3 };
-  return { distance: w.distance / sum, responseRate: w.responseRate / sum, rating: w.rating / sum };
+  const sum = w.distance + w.responseRate + w.rating + w.reliability;
+  if (sum === 0) return { distance: 0.25, responseRate: 0.25, rating: 0.25, reliability: 0.25 };
+  return {
+    distance: w.distance / sum,
+    responseRate: w.responseRate / sum,
+    rating: w.rating / sum,
+    reliability: w.reliability / sum,
+  };
 }
 
 /**

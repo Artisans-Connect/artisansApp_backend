@@ -14,6 +14,7 @@ import tradesRouter from "./trades";
 import releasesRouter from "./releases";
 import paymentsRouter from "./payments";
 import reportsRouter from "./reports";
+import publicReportsRouter from "./publicReports";
 import negotiationsRouter from "./negotiations";
 import walletRouter from "./wallet";
 import disputesRouter from "./disputes";
@@ -37,6 +38,10 @@ router.use("/trades", tradesRouter);
 router.use("/releases", releasesRouter);
 router.use("/payments", paymentsRouter);
 router.use("/reports", reportsRouter);
+// Public (unauthenticated) abuse-report intake for the Support Hub web form.
+// Mounted as its own router so the authenticated /reports routes keep their
+// blanket authMiddleware untouched.
+router.use("/public/reports", publicReportsRouter);
 router.use("/negotiations", negotiationsRouter);
 router.use("/wallet", walletRouter);
 router.use("/disputes", disputesRouter);

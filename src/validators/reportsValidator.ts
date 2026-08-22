@@ -58,3 +58,30 @@ export const blockUserSchema = z.object({
   blocked_id: z.string().uuid(),
   reason: z.string().trim().max(500).optional().nullable(),
 });
+
+// Public "Report Abuse" web form (Support Hub). The submitter is NOT a
+// logged-in user, so we capture their self-provided identity and a free-text
+// description of who they're reporting instead of profile UUIDs.
+export const PUBLIC_REPORT_REASONS = [
+  "scam",
+  "harassment",
+  "no_show",
+  "property_damage",
+  "other",
+] as const;
+
+export const createPublicReportSchema = z.object({
+  reporter_name: z.string().trim().min(2, "Please provide your name").max(120),
+  reporter_email: z.string().trim().toLowerCase().email("A valid email address is required").max(200),
+  reported_target: z
+    .string()
+    .trim()
+    .min(2, "Please tell us who you are reporting (name or phone)")
+    .max(200),
+  reason: z.enum(PUBLIC_REPORT_REASONS).optional().default("other"),
+  details: z
+    .string()
+    .trim()
+    .min(10, "Please describe the incident (at least 10 characters)")
+    .max(1500, "Details cannot exceed 1500 characters"),
+});

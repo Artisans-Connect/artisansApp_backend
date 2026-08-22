@@ -1,6 +1,12 @@
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
-import { createReportSchema, updateReportModerationSchema, blockUserSchema } from "../validators/reportsValidator";
+import {
+  createReportSchema,
+  updateReportModerationSchema,
+  blockUserSchema,
+  createPublicReportSchema,
+  PUBLIC_REPORT_REASONS,
+} from "../validators/reportsValidator";
 
 function generateTicketNumber(): string {
   const year = new Date().getFullYear();
@@ -144,6 +150,116 @@ export async function createReport(reporterId: string, body: unknown) {
   return report;
 }
 
+// Maps the public web form's coarse "reason" to the internal report category.
+// Kept intentionally conservative: anything unrecognised falls back to OTHER.
+const PUBLIC_REASON_TO_CATEGORY: Record<
+  (typeof PUBLIC_REPORT_REASONS)[number],
+  string
+> = {
+  scam: "SCAM_FRAUD",
+  harassment: "HARASSMENT",
+  no_show: "NO_SHOW",
+  property_damage: "PROPERTY_DAMAGE",
+  other: "OTHER",
+};
+
+const PUBLIC_REASON_LABELS: Record<(typeof PUBLIC_REPORT_REASONS)[number], string> = {
+  scam: "Scam / Financial Fraud",
+  harassment: "Harassment / Abusive behaviour",
+  no_show: "No-show after payment",
+  property_damage: "Severe damage or theft",
+  other: "Other violation",
+};
+
+/**
+ * Intake for the public "Report Abuse" web form (Support Hub). The reporter is
+ * NOT authenticated, so no reporter_id/reported_id is attached: their identity
+ * and the free-text target are preserved in context_metadata and echoed into the
+ * description so a moderator can triage and manually resolve the reported party.
+ *
+ * Deliberately does NOT auto-resolve reported_id from the free-text target: an
+ * anonymous, unverified submitter must not be able to attach a real account to a
+ * report (that would let anyone inflate an innocent user's repeat-offender risk
+ * score, which is keyed on reports.reported_id). Resolution stays a moderator step.
+ *
+ * Feeds the same `reports` table / moderation queue as the in-app path.
+ */
+export async function createPublicReport(body: unknown) {
+  const parsed = createPublicReportSchema.safeParse(body);
+  if (!parsed.success) {
+    throw appError(400, parsed.error.issues[0]?.message ?? "Invalid report payload", "VALIDATION_ERROR");
+  }
+
+  const { reporter_name, reporter_email, reported_target, reason, details } = parsed.data;
+  const category = PUBLIC_REASON_TO_CATEGORY[reason] ?? "OTHER";
+
+  // Same priority derivation as the authenticated path (never emergency here —
+  // the web form is not a real-time SOS channel).
+  let priority = "MEDIUM";
+  if (["SAFETY_CONCERN", "VIOLENCE_THREAT", "HARASSMENT"].includes(category)) {
+    priority = "HIGH";
+  } else if (["POOR_WORKMANSHIP", "UNPROFESSIONAL_BEHAVIOR"].includes(category)) {
+    priority = "LOW";
+  }
+
+  // Compose a moderator-readable description so the essential context is visible
+  // even in the queue list view (which shows only `description`).
+  const description = [
+    "[Public web report — reporter is not a logged-in user; verify independently]",
+    `Reported (unverified, moderator to resolve): ${reported_target}`,
+    `Reporter: ${reporter_name} <${reporter_email}>`,
+    `Reason: ${PUBLIC_REASON_LABELS[reason]}`,
+    "",
+    details,
+  ].join("\n");
+
+  const contextMetadata: Record<string, unknown> = {
+    source: "public_web",
+    submission_timestamp: new Date().toISOString(),
+    public_reporter: { name: reporter_name, email: reporter_email },
+    reported_target_freetext: reported_target,
+    web_reason: reason,
+  };
+
+  const ticketNumber = generateTicketNumber();
+
+  const { data: report, error } = await supabaseAdmin
+    .from("reports")
+    .insert({
+      ticket_number: ticketNumber,
+      reporter_id: null,
+      reported_id: null,
+      category,
+      description,
+      attachments: [],
+      priority,
+      status: "PENDING",
+      is_emergency: false,
+      context_metadata: contextMetadata,
+    })
+    .select("id, ticket_number, status, created_at")
+    .single();
+
+  if (error || !report) {
+    throw appError(500, error?.message ?? "Failed to submit report", "REPORT_CREATION_FAILED");
+  }
+
+  // Audit trail. No actor_id (anonymous), so attributed to the system with a
+  // descriptive note; actor_role 'system' mirrors other non-user audit rows.
+  await supabaseAdmin.from("report_audit_logs").insert({
+    report_id: report.id,
+    actor_id: null,
+    actor_role: "system",
+    action: "PUBLIC_REPORT_SUBMITTED",
+    new_status: "PENDING",
+    notes: `Public web report ${ticketNumber} filed by ${reporter_name} <${reporter_email}> under category ${category}. Reported target (free text): "${reported_target}".`,
+  });
+
+  // No reporter notification: an anonymous web reporter has no in-app account.
+  // The returned ticket number is their only reference.
+  return { ticket_number: report.ticket_number, status: report.status, created_at: report.created_at };
+}
+
 export async function getUserReports(reporterId: string) {
   const { data, error } = await supabaseAdmin
     .from("reports")
@@ -181,6 +297,37 @@ export async function blockUser(blockerId: string, body: unknown) {
   const { blocked_id, reason } = parsed.data;
   if (blockerId === blocked_id) {
     throw appError(400, "You cannot block yourself", "INVALID_BLOCK");
+  }
+
+  // Check if there is an active job between blocker and blocked user
+  const activeStatuses = [
+    "matched",
+    "scheduled_confirmed",
+    "on_the_way",
+    "arrived",
+    "in_progress",
+    "termination_requested",
+    "pending_client_approval",
+  ];
+
+  const { data: activeJob, error: jobCheckError } = await supabaseAdmin
+    .from("jobs")
+    .select("id")
+    .or(`and(client_id.eq.${blockerId},worker_id.eq.${blocked_id}),and(client_id.eq.${blocked_id},worker_id.eq.${blockerId})`)
+    .in("status", activeStatuses)
+    .limit(1)
+    .maybeSingle();
+
+  if (jobCheckError) {
+    throw appError(500, jobCheckError.message, "BLOCK_CHECK_FAILED");
+  }
+
+  if (activeJob) {
+    throw appError(
+      400,
+      "Cannot block this user while a booking is in progress. Please complete or cancel the booking first.",
+      "ACTIVE_JOB_CONSTRAINT"
+    );
   }
 
   const { data, error } = await supabaseAdmin
@@ -516,11 +663,24 @@ export async function updateReportModeration(reportId: string, moderatorId: stri
   if (existingReport.reported_id && updateData.action_taken) {
     if (updateData.action_taken === "TEMPORARY_SUSPENSION" || updateData.action_taken === "PERMANENT_BAN") {
       const reason = updateData.resolution_reason || `Account ${updateData.action_taken} following Trust & Safety investigation (${existingReport.ticket_number})`;
+
+      // TEMPORARY_SUSPENSION auto-expires after suspend_duration_days (default 7);
+      // PERMANENT_BAN leaves suspended_until NULL so it never auto-lifts.
+      const DEFAULT_TEMP_SUSPENSION_DAYS = 7;
+      const suspendedUntil =
+        updateData.action_taken === "TEMPORARY_SUSPENSION"
+          ? new Date(
+              Date.now() +
+                (updateData.suspend_duration_days ?? DEFAULT_TEMP_SUSPENSION_DAYS) * 24 * 60 * 60 * 1000,
+            ).toISOString()
+          : null;
+
       await supabaseAdmin
         .from("profiles")
         .update({
           account_status: "suspended",
           suspended_at: now,
+          suspended_until: suspendedUntil,
           suspension_reason: reason,
           updated_at: now,
         })
@@ -530,6 +690,29 @@ export async function updateReportModeration(reportId: string, moderatorId: stri
         .from("workers")
         .update({ is_available: false, updated_at: now })
         .eq("id", existingReport.reported_id);
+
+      // Notify the suspended user. Parity with the direct portal-suspend path
+      // (adminService.suspendAccount), which already notifies — moderation-driven
+      // suspensions previously notified only the reporter, so the suspended party
+      // was left with no in-app explanation. Same data.type keeps clients uniform.
+      const isTemporary = updateData.action_taken === "TEMPORARY_SUSPENSION";
+      const untilLabel = suspendedUntil ? new Date(suspendedUntil).toLocaleDateString() : null;
+      try {
+        await supabaseAdmin.from("notifications").insert({
+          user_id: existingReport.reported_id,
+          title: isTemporary ? "⏳ Account Temporarily Suspended" : "🚫 Account Suspended",
+          body:
+            isTemporary && untilLabel
+              ? `Your CraftMatch account has been temporarily suspended following a Trust & Safety review: ${reason}. Access is automatically restored on ${untilLabel}.`
+              : `Your CraftMatch account has been suspended following a Trust & Safety review: ${reason}.`,
+          data: {
+            type: "ACCOUNT_SUSPENDED",
+            action_taken: updateData.action_taken,
+            reason,
+            suspended_until: suspendedUntil,
+          },
+        });
+      } catch (_) {}
     }
   }
 

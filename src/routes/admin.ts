@@ -86,6 +86,15 @@ router.get(
   }),
 );
 
+router.get(
+  "/accounts/:id/blocks",
+  catchAsync(async (req: Request, res: Response) => {
+    const userId = paramId(req.params.id);
+    const result = await adminService.getUserBlockRelationships(userId);
+    res.status(200).json({ success: true, data: result });
+  }),
+);
+
 router.patch(
   "/accounts/:id/suspend",
   catchAsync(async (req: Request, res: Response) => {
