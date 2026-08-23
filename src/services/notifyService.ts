@@ -4,12 +4,15 @@ import { buildNotificationData } from "./notificationPayloads";
 import { env } from "../config/env";
 import { fcmProvider, smsProvider, whatsappProvider, type NotificationProvider } from "./notificationProviders";
 import { shouldAttemptFallback } from "./notificationFallbackPolicy";
+import { retryDelays } from "./notificationRetryPolicy";
 
 type PushPayload = {
   title: string;
   body: string;
   data?: Record<string, string>;
 };
+
+const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 async function getUserFcmTokens(userId: string): Promise<string[]> {
   const { data: devices } = await supabaseAdmin
@@ -30,12 +33,14 @@ async function getUserFcmTokens(userId: string): Promise<string[]> {
 }
 
 async function storeNotification(userId: string, payload: PushPayload): Promise<string | null> {
+  const dedupeKey = payload.data?.dedupeKey ?? null;
   const { data, error } = await supabaseAdmin.from("notifications").insert({
     user_id: userId,
     type: payload.data?.type ?? "general",
     title: payload.title,
     body: payload.body,
     data: payload.data ?? {},
+    dedupe_key: dedupeKey,
   }).select("id").single();
   if (error) logger(`Notification store failed: ${error.message}`);
   return data?.id ?? null;
@@ -120,16 +125,25 @@ async function sendFallback(userId: string, notificationId: string | null, paylo
     { enabled: env.SMS_FALLBACK_ENABLED, provider: smsProvider },
   ];
 
+  if (env.NOTIFICATION_FALLBACK_DELAY_SECONDS > 0) {
+    await wait(env.NOTIFICATION_FALLBACK_DELAY_SECONDS * 1000);
+  }
+
   for (const { enabled, provider } of channels) {
     if (!enabled) continue;
-    try {
-      const messageId = await provider.send(phone, payload);
-      await recordDelivery(notificationId, provider, "sent", undefined, messageId);
-      return;
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "Provider rejected message";
-      await recordDelivery(notificationId, provider, "failed", reason);
-      logger(`${provider.channel} fallback failed:`, error);
+    const delays = retryDelays(env.NOTIFICATION_PROVIDER_MAX_ATTEMPTS);
+    for (let attempt = 0; attempt < env.NOTIFICATION_PROVIDER_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const messageId = await provider.send(phone, payload);
+        await recordDelivery(notificationId, provider, "sent", undefined, messageId);
+        return;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "Provider rejected message";
+        await recordDelivery(notificationId, provider, "failed", reason);
+        logger(`${provider.channel} fallback failed:`, error);
+        const delay = delays[attempt];
+        if (delay) await wait(delay);
+      }
     }
   }
 }

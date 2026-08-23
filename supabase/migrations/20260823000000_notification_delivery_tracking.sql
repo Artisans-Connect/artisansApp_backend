@@ -14,3 +14,11 @@ CREATE INDEX IF NOT EXISTS idx_notification_deliveries_notification
   ON notification_deliveries (notification_id, attempted_at DESC);
 
 ALTER TABLE notification_deliveries ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE notifications
+  ADD COLUMN IF NOT EXISTS dedupe_key text,
+  ADD COLUMN IF NOT EXISTS fallback_after timestamptz;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_user_dedupe
+  ON notifications (user_id, dedupe_key)
+  WHERE dedupe_key IS NOT NULL;

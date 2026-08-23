@@ -29,6 +29,8 @@ const envSchema = z
     WHATSAPP_PHONE_NUMBER_ID: z.string().min(1).optional(),
     WHATSAPP_TEMPLATE_NAME: z.string().min(1).default("craftmatch_notification"),
     WHATSAPP_TEMPLATE_LANGUAGE: z.string().min(1).default("en"),
+    NOTIFICATION_FALLBACK_DELAY_SECONDS: z.coerce.number().int().min(0).max(3600).default(30),
+    NOTIFICATION_PROVIDER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(5).default(1),
   })
   .refine((data) => data.FIREBASE_SERVICE_ACCOUNT_PATH || data.FIREBASE_SERVICE_ACCOUNT_BASE64, {
     message: "Either FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_BASE64 is required",
