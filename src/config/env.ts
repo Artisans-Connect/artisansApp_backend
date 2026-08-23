@@ -3,6 +3,12 @@ import { z } from "zod";
 
 dotenv.config();
 
+const booleanFlag = z.preprocess(
+  (value) => typeof value === "string" ? value.toLowerCase() : value,
+  z.union([z.literal(true), z.literal(false), z.literal("true"), z.literal("false")])
+    .transform((value) => value === true || value === "true"),
+).default(false);
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -13,6 +19,16 @@ const envSchema = z
     FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1).optional(),
     FIREBASE_SERVICE_ACCOUNT_BASE64: z.string().min(1).optional(),
     GEMINI_API_KEY: z.string().min(1).optional(),
+    SMS_FALLBACK_ENABLED: booleanFlag,
+    WHATSAPP_FALLBACK_ENABLED: booleanFlag,
+    HUBTEL_SMS_ENDPOINT: z.url().default("https://smsc.hubtel.com/v1/messages/send"),
+    HUBTEL_CLIENT_ID: z.string().min(1).optional(),
+    HUBTEL_CLIENT_SECRET: z.string().min(1).optional(),
+    HUBTEL_SENDER_ID: z.string().min(1).max(11).optional(),
+    WHATSAPP_ACCESS_TOKEN: z.string().min(1).optional(),
+    WHATSAPP_PHONE_NUMBER_ID: z.string().min(1).optional(),
+    WHATSAPP_TEMPLATE_NAME: z.string().min(1).default("craftmatch_notification"),
+    WHATSAPP_TEMPLATE_LANGUAGE: z.string().min(1).default("en"),
   })
   .refine((data) => data.FIREBASE_SERVICE_ACCOUNT_PATH || data.FIREBASE_SERVICE_ACCOUNT_BASE64, {
     message: "Either FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_BASE64 is required",

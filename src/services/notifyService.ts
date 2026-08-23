@@ -1,7 +1,9 @@
 import { supabaseAdmin } from "../config/supabase";
 import { logger } from "../utils/logger";
 import { buildNotificationData } from "./notificationPayloads";
-import { fcmProvider } from "./notificationProviders";
+import { env } from "../config/env";
+import { fcmProvider, smsProvider, whatsappProvider, type NotificationProvider } from "./notificationProviders";
+import { shouldAttemptFallback } from "./notificationFallbackPolicy";
 
 type PushPayload = {
   title: string;
@@ -27,20 +29,52 @@ async function getUserFcmTokens(userId: string): Promise<string[]> {
   return [...tokens];
 }
 
-async function storeNotification(userId: string, payload: PushPayload): Promise<void> {
-  const { error } = await supabaseAdmin.from("notifications").insert({
+async function storeNotification(userId: string, payload: PushPayload): Promise<string | null> {
+  const { data, error } = await supabaseAdmin.from("notifications").insert({
     user_id: userId,
     type: payload.data?.type ?? "general",
     title: payload.title,
     body: payload.body,
     data: payload.data ?? {},
-  });
+  }).select("id").single();
   if (error) logger(`Notification store failed: ${error.message}`);
+  return data?.id ?? null;
+}
+
+function firebaseErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+async function revokeInvalidFcmToken(token: string): Promise<void> {
+  const now = new Date().toISOString();
+  await supabaseAdmin.from("notification_devices").update({ revoked_at: now, updated_at: now }).eq("fcm_token", token);
+  await supabaseAdmin.from("profiles").update({ fcm_token: null }).eq("fcm_token", token);
+}
+
+async function recordDelivery(
+  notificationId: string | null,
+  provider: NotificationProvider,
+  status: "sent" | "failed" | "skipped",
+  failureReason?: string,
+  providerMessageId?: string,
+) {
+  if (!notificationId) return;
+  const { error } = await supabaseAdmin.from("notification_deliveries").insert({
+    notification_id: notificationId,
+    channel: provider.channel,
+    provider: provider.channel === "fcm" ? "firebase" : provider.channel === "sms" ? "hubtel" : "meta",
+    status,
+    delivered_at: null,
+    failure_reason: failureReason ?? null,
+    provider_message_id: providerMessageId ?? null,
+  });
+  if (error) logger(`Notification delivery record failed: ${error.message}`);
 }
 
 export async function sendToToken(token: string, payload: PushPayload): Promise<void> {
   try {
-    await fcmProvider.sendToToken(token, payload);
+    await fcmProvider.send(token, payload);
   } catch (error) {
     logger("FCM send failed:", error);
     throw error;
@@ -48,19 +82,54 @@ export async function sendToToken(token: string, payload: PushPayload): Promise<
 }
 
 export async function sendToUser(userId: string, payload: PushPayload): Promise<void> {
-  await storeNotification(userId, payload);
+  const notificationId = await storeNotification(userId, payload);
 
   const tokens = await getUserFcmTokens(userId);
+  let fcmSent = false;
   if (tokens.length === 0) {
     logger(`No FCM tokens for user ${userId}`);
-    return;
   }
 
   for (const token of tokens) {
     try {
       await sendToToken(token, payload);
-    } catch {
+      fcmSent = true;
+      await recordDelivery(notificationId, fcmProvider, "sent");
+    } catch (error) {
+      await recordDelivery(notificationId, fcmProvider, "failed", "FCM provider rejected message");
+      const code = firebaseErrorCode(error);
+      if (code === "messaging/registration-token-not-registered" || code === "messaging/invalid-registration-token") {
+        await revokeInvalidFcmToken(token);
+      }
       // Do not crash caller paths on push failure.
+    }
+  }
+
+  if (shouldAttemptFallback({ priority: payload.data?.priority, fcmSent })) {
+    await sendFallback(userId, notificationId, payload);
+  }
+}
+
+async function sendFallback(userId: string, notificationId: string | null, payload: PushPayload): Promise<void> {
+  const { data: profile } = await supabaseAdmin.from("profiles").select("phone").eq("id", userId).maybeSingle();
+  const phone = profile?.phone;
+  if (!phone) return;
+
+  const channels: Array<{ enabled: boolean; provider: NotificationProvider }> = [
+    { enabled: env.WHATSAPP_FALLBACK_ENABLED, provider: whatsappProvider },
+    { enabled: env.SMS_FALLBACK_ENABLED, provider: smsProvider },
+  ];
+
+  for (const { enabled, provider } of channels) {
+    if (!enabled) continue;
+    try {
+      const messageId = await provider.send(phone, payload);
+      await recordDelivery(notificationId, provider, "sent", undefined, messageId);
+      return;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Provider rejected message";
+      await recordDelivery(notificationId, provider, "failed", reason);
+      logger(`${provider.channel} fallback failed:`, error);
     }
   }
 }
