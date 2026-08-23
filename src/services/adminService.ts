@@ -417,6 +417,27 @@ export async function reactivateAccount(accountId: string) {
   return data;
 }
 
+export async function processExpiredSuspensions(): Promise<void> {
+  const now = new Date().toISOString();
+  const { data: expired, error } = await supabaseAdmin
+    .from("profiles")
+    .select("id, full_name, suspended_until")
+    .eq("account_status", "suspended")
+    .not("suspended_until", "is", null)
+    .lte("suspended_until", now);
+
+  if (error || !expired || expired.length === 0) return;
+
+  for (const profile of expired) {
+    await reactivateAccount(profile.id);
+    await supabaseAdmin
+      .from("workers")
+      .update({ is_available: true, updated_at: now })
+      .eq("id", profile.id);
+    logger(`Auto-reactivated expired suspension for account ${profile.id} (${profile.full_name})`);
+  }
+}
+
 export async function getBlockedAndReportedAccounts() {
   const [{ data: accounts, error: accountsError }, { data: reports, error: reportsError }] = await Promise.all([
     supabaseAdmin
