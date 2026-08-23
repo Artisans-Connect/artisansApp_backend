@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
+import { logger } from "../utils/logger";
 
 const nullableText = z.string().trim().optional().nullable();
 
