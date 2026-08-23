@@ -57,6 +57,14 @@ router.get(
 );
 
 router.get(
+  "/stats",
+  catchAsync(async (_req: Request, res: Response) => {
+    const stats = await verificationService.getPublicPortalStats();
+    res.status(200).json({ success: true, data: stats });
+  }),
+);
+
+router.get(
   "/admin/applications",
   requirePortalAdmin,
   catchAsync(async (req: Request, res: Response) => {
