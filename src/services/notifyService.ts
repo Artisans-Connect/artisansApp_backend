@@ -1,7 +1,7 @@
-import { firebaseAdmin } from "../config/firebase";
 import { supabaseAdmin } from "../config/supabase";
 import { logger } from "../utils/logger";
 import { buildNotificationData } from "./notificationPayloads";
+import { fcmProvider } from "./notificationProviders";
 
 type PushPayload = {
   title: string;
@@ -40,31 +40,7 @@ async function storeNotification(userId: string, payload: PushPayload): Promise<
 
 export async function sendToToken(token: string, payload: PushPayload): Promise<void> {
   try {
-    await firebaseAdmin.messaging().send({
-      token,
-      notification: { title: payload.title, body: payload.body },
-      data: payload.data ?? {},
-      android: {
-        priority: "high",
-        notification: {
-          sound: "default",
-          clickAction: "FLUTTER_NOTIFICATION_CLICK",
-          channelId: "high_importance_channel",
-        },
-      },
-      apns: {
-        headers: {
-          "apns-priority": "10",
-        },
-        payload: {
-          aps: {
-            sound: "default",
-            badge: 1,
-            contentAvailable: true,
-          },
-        },
-      },
-    });
+    await fcmProvider.sendToToken(token, payload);
   } catch (error) {
     logger("FCM send failed:", error);
     throw error;
