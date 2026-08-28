@@ -311,7 +311,7 @@ export async function updateProfile(userId: string, body: unknown) {
     throw appError(400, parsed.error.issues[0]?.message ?? "Invalid update", "VALIDATION_ERROR");
   }
 
-  const { skills, service_areas, ...profileUpdates } = parsed.data;
+  const { skills, service_areas, hourly_rate, ...profileUpdates } = parsed.data;
 
   if (Object.keys(profileUpdates).length > 0) {
     const { error } = await supabaseAdmin
@@ -322,7 +322,7 @@ export async function updateProfile(userId: string, body: unknown) {
     if (error) throw appError(500, error.message, "PROFILE_UPDATE_FAILED");
   }
 
-  if (skills !== undefined || service_areas !== undefined) {
+  if (skills !== undefined || service_areas !== undefined || hourly_rate !== undefined) {
     const { data: existingWorker } = await supabaseAdmin
       .from("workers")
       .select("id")
@@ -333,6 +333,7 @@ export async function updateProfile(userId: string, body: unknown) {
       const workerUpdates: Record<string, any> = {};
       if (skills !== undefined) workerUpdates.skills = skills;
       if (service_areas !== undefined) workerUpdates.service_areas = service_areas;
+      if (hourly_rate !== undefined) workerUpdates.hourly_rate = hourly_rate;
 
       const { error: workerError } = await supabaseAdmin
         .from("workers")

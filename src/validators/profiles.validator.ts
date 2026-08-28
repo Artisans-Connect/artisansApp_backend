@@ -22,6 +22,7 @@ export const updateProfileSchema = z.object({
   location_label: z.string().trim().optional(),
   skills: z.array(z.string().trim().min(1)).optional(),
   service_areas: z.array(z.string().trim().min(1)).optional(),
+  hourly_rate: z.number().positive().nullable().optional(),
 });
 
 export const fcmTokenSchema = z.object({
