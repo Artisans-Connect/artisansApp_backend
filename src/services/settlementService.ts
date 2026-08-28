@@ -61,13 +61,13 @@ export async function calculateSettlement(jobId: string) {
     }
   }
 
-  // 3. Fetch accepted extra charges with descriptions
+  // 3. Fetch accepted/paid extra charges with descriptions
   const { data: extraCharges } = await supabaseAdmin
     .from("negotiations")
     .select("agreed_amount, description, created_at")
     .eq("job_id", jobId)
     .eq("type", "extra_charge")
-    .eq("status", "accepted");
+    .in("status", ["accepted", "paid"]);
 
   // 4. Fetch pending/open extra charge proposals
   const { data: pendingCharges } = await supabaseAdmin

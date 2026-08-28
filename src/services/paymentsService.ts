@@ -520,12 +520,21 @@ export async function verifyPayment(reference: string) {
       }
 
       console.log(`[PAYMENT] Depositing GHS ${depositAmount} into escrow for job ${jobId}`);
+      const { data: existingEscrow } = await supabaseAdmin
+        .from("job_escrow_balances")
+        .select("held_amount")
+        .eq("job_id", jobId)
+        .maybeSingle();
+
+      const currentHeld = existingEscrow ? Number(existingEscrow.held_amount || 0) : 0;
+
       await supabaseAdmin.from("job_escrow_balances").upsert({
         job_id: jobId,
-        held_amount: depositAmount,
+        held_amount: currentHeld + depositAmount,
         released_amount: 0.00,
         refunded_amount: 0.00,
         status: "held",
+        updated_at: new Date().toISOString(),
       });
 
       await supabaseAdmin.from("escrow_ledger").insert({
