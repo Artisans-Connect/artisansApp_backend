@@ -20,6 +20,8 @@ export const updateProfileSchema = z.object({
   avatar_url: z.string().url().nullable().optional(),
   bio: z.string().trim().max(500).optional(),
   location_label: z.string().trim().optional(),
+  skills: z.array(z.string().trim().min(1)).optional(),
+  service_areas: z.array(z.string().trim().min(1)).optional(),
 });
 
 export const fcmTokenSchema = z.object({

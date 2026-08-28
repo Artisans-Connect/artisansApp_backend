@@ -311,12 +311,38 @@ export async function updateProfile(userId: string, body: unknown) {
     throw appError(400, parsed.error.issues[0]?.message ?? "Invalid update", "VALIDATION_ERROR");
   }
 
-  const { error } = await supabaseAdmin
-    .from("profiles")
-    .update({ ...parsed.data, updated_at: new Date().toISOString() })
-    .eq("id", userId);
+  const { skills, service_areas, ...profileUpdates } = parsed.data;
 
-  if (error) throw appError(500, error.message, "PROFILE_UPDATE_FAILED");
+  if (Object.keys(profileUpdates).length > 0) {
+    const { error } = await supabaseAdmin
+      .from("profiles")
+      .update({ ...profileUpdates, updated_at: new Date().toISOString() })
+      .eq("id", userId);
+
+    if (error) throw appError(500, error.message, "PROFILE_UPDATE_FAILED");
+  }
+
+  if (skills !== undefined || service_areas !== undefined) {
+    const { data: existingWorker } = await supabaseAdmin
+      .from("workers")
+      .select("id")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (existingWorker) {
+      const workerUpdates: Record<string, any> = {};
+      if (skills !== undefined) workerUpdates.skills = skills;
+      if (service_areas !== undefined) workerUpdates.service_areas = service_areas;
+
+      const { error: workerError } = await supabaseAdmin
+        .from("workers")
+        .update(workerUpdates)
+        .eq("id", userId);
+
+      if (workerError) throw appError(500, workerError.message, "WORKER_PROFILE_UPDATE_FAILED");
+    }
+  }
+
   return getProfile(userId);
 }
 
