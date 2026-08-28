@@ -370,7 +370,7 @@ export async function verifyPayment(reference: string) {
 
       const { data: job } = await supabaseAdmin
         .from("jobs")
-        .select("status, job_mode")
+        .select("status, job_mode, excluded_worker_ids")
         .eq("id", jobId)
         .maybeSingle();
 
@@ -401,11 +401,11 @@ export async function verifyPayment(reference: string) {
         if (applicationId) {
           const { data: app } = await supabaseAdmin
             .from("job_applications")
-            .select("worker_id")
+            .select("worker_id, status")
             .eq("id", applicationId)
             .maybeSingle();
 
-          if (app) {
+          if (app && app.status !== "withdrawn" && app.status !== "declined") {
             const isScheduled = job.job_mode === "scheduled";
             nextJobStatus = isScheduled ? JOB_STATUS.SCHEDULED_CONFIRMED : JOB_STATUS.MATCHED;
             
@@ -437,6 +437,28 @@ export async function verifyPayment(reference: string) {
                 .eq("id", app.worker_id);
             }
             console.log(`[PAYMENT] Job status updated to ${nextJobStatus} and assigned to worker ${app.worker_id}`);
+          } else {
+            // Worker withdrew or was declined before payment completed!
+            // Exclude this worker from matching if they were the one assigned
+            const existingExcluded: string[] = (job as any).excluded_worker_ids ?? [];
+            const updatedExcluded = app?.worker_id
+              ? [...new Set([...existingExcluded, app.worker_id])]
+              : existingExcluded;
+
+            await supabaseAdmin
+              .from("jobs")
+              .update({
+                worker_id: null,
+                status: JOB_STATUS.MATCHING,
+                excluded_worker_ids: updatedExcluded,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", jobId);
+
+            console.log(`[PAYMENT] Assigned worker ${app?.worker_id} had withdrawn. Resetting job to MATCHING and triggering redispatch.`);
+            
+            const matchingService = await import("./matching/assignmentService");
+            void matchingService.findAndDispatch(jobId, 1);
           }
         } else {
           await supabaseAdmin

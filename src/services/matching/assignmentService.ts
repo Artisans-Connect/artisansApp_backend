@@ -166,6 +166,10 @@ export async function findAndDispatch(jobId: string, round = 1): Promise<void> {
   await expireTimedOutDispatches(jobId);
   const exclude = await getDispatchedWorkerIds(jobId);
 
+  // Permanently exclude workers who previously backed out of this job
+  const jobExcluded: string[] = (job as any).excluded_worker_ids ?? [];
+  for (const id of jobExcluded) exclude.add(id);
+
   let batch: WorkerRow[] = [];
   let radiusKm = MATCHING.RADIUS_STEPS_KM[state.radiusIndex] ?? MATCHING.RADIUS_STEPS_KM.at(-1)!;
 

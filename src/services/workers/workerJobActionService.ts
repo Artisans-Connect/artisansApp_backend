@@ -155,17 +155,22 @@ export async function cancelAssignedJob(userId: string, jobId: string, body: unk
 
   const { data: before } = await supabaseAdmin
     .from("jobs")
-    .select("status")
+    .select("status, excluded_worker_ids")
     .eq("id", jobId)
     .eq("worker_id", userId)
     .maybeSingle();
 
   if (before?.status === JOB_STATUS.AWAITING_PAYMENT) {
+    // Exclude the withdrawing worker so they won't be re-dispatched
+    const existingExcluded: string[] = (before as any).excluded_worker_ids ?? [];
+    const updatedExcluded = [...new Set([...existingExcluded, userId])];
+
     const { data: updatedJob, error: updateError } = await supabaseAdmin
       .from("jobs")
       .update({
         status: JOB_STATUS.SEARCHING,
         worker_id: null,
+        excluded_worker_ids: updatedExcluded,
         updated_at: new Date().toISOString(),
       })
       .eq("id", jobId)

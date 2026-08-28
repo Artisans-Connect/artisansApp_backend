@@ -785,9 +785,19 @@ export async function requestAnotherWorker(userId: string, jobId: string) {
     .eq("job_id", jobId)
     .eq("status", "accepted");
 
+  // Permanently exclude the worker who caused the service disruption
+  const cancelledWorkerId: string | null = job.worker_id;
+  const existingExcluded: string[] = job.excluded_worker_ids ?? [];
+  const updatedExcluded = cancelledWorkerId
+    ? [...new Set([...existingExcluded, cancelledWorkerId])]
+    : existingExcluded;
+
   const { data, error } = await supabaseAdmin
     .from("jobs")
-    .update(buildReopenAfterWorkerCancelPatch(new Date().toISOString(), expiresAt))
+    .update({
+      ...buildReopenAfterWorkerCancelPatch(new Date().toISOString(), expiresAt),
+      excluded_worker_ids: updatedExcluded,
+    })
     .eq("id", jobId)
     .select("*, worker:profiles!jobs_worker_id_fkey(full_name, avatar_url, phone, workers(is_verified))")
     .single();

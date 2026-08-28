@@ -48,7 +48,7 @@ async function ensureWorkerHasNoActiveJob(workerId: string, currentJobId?: strin
 export async function applyToJob(workerId: string, jobId: string, body?: ApplyToJobInput) {
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
-    .select("id, client_id, status, worker_id, job_mode")
+    .select("id, client_id, status, worker_id, job_mode, excluded_worker_ids")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -58,6 +58,12 @@ export async function applyToJob(workerId: string, jobId: string, body?: ApplyTo
     throw appError(409, "Job is not open for applications", "INVALID_JOB_STATE");
   }
   if (job.worker_id) throw appError(409, "Job already has an assigned worker", "JOB_ALREADY_TAKEN");
+
+  // Prevent workers who previously backed out from re-applying
+  const excluded: string[] = (job as any).excluded_worker_ids ?? [];
+  if (excluded.includes(workerId)) {
+    throw appError(403, "You are not eligible to apply for this job", "WORKER_EXCLUDED");
+  }
 
   const isScheduled = job.job_mode === JOB_MODE.SCHEDULED;
 
@@ -291,7 +297,7 @@ export async function withdrawApplication(workerId: string, jobId: string) {
     // If the application was accepted, they can only withdraw if the job is still awaiting payment
     const { data: job, error: jobErr } = await supabaseAdmin
       .from("jobs")
-      .select("status, client_id")
+      .select("status, client_id, excluded_worker_ids")
       .eq("id", jobId)
       .maybeSingle();
 
@@ -302,12 +308,16 @@ export async function withdrawApplication(workerId: string, jobId: string) {
       throw appError(400, "Cannot withdraw application after payment has been completed. Use the job cancellation flow instead.", "INVALID_APPLICATION_STATE");
     }
 
-    // Reset job back to searching/matching, clear worker_id
+    // Reset job back to searching/matching, clear worker_id, and exclude the withdrawing worker
+    const existingExcluded: string[] = (job as any).excluded_worker_ids ?? [];
+    const updatedExcluded = [...new Set([...existingExcluded, workerId])];
+
     const { error: jobUpdateErr } = await supabaseAdmin
       .from("jobs")
       .update({
         status: JOB_STATUS.SEARCHING,
         worker_id: null,
+        excluded_worker_ids: updatedExcluded,
         updated_at: new Date().toISOString()
       })
       .eq("id", jobId);

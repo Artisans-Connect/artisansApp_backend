@@ -103,5 +103,7 @@ export function buildReopenAfterWorkerCancelPatch(updatedAt: string, expiresAt: 
     cancellation_fee_currency: "GHS",
     expires_at: expiresAt,
     updated_at: updatedAt,
+    // NOTE: excluded_worker_ids is deliberately NOT cleared here
+    //       so the re-search skips workers who already backed out.
   };
 }
