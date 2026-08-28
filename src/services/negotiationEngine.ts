@@ -236,7 +236,7 @@ export async function createNegotiation(params: CreateNegotiationParams) {
       await notifyService.sendToUser(recipientId, {
         title: "Bargaining Offer Update",
         body: `${senderName} proposed a quote of GHS ${initialAmount.toFixed(2)}`,
-        data: { jobId, negotiationId: negotiation.id, type: "quote", applicationId }
+        data: { jobId, negotiationId: negotiation.id, type: "quote", applicationId: applicationId || "" }
       });
     } else if (type === 'extra_charge') {
       await notifyService.sendToUser(recipientId, {
