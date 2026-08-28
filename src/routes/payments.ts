@@ -470,7 +470,7 @@ router.post("/settlement/:jobId/checkout", authMiddleware, idempotencyMiddleware
       jobId: req.params.jobId as string,
       type: "completion_adjustment",
       initiatorId: req.user!.id,
-      initialAmount: calculation.gross_amount,
+      initialAmount: calculation.outstanding_balance,
       description: "Final completion settlement"
     });
 

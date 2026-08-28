@@ -7,6 +7,7 @@ import * as settlementService from "./settlementService";
 import * as paystackService from "./payments/paystackService";
 import * as escrowService from "./payments/escrowService";
 import * as extraChargeService from "./extraChargeService";
+import * as walletService from "./walletService";
 
 export * from "./payments/paystackService";
 export * from "./payments/escrowService";
@@ -80,17 +81,35 @@ export async function initializePayment(userId: string, jobId: string, applicati
       amount = Number(neg.agreed_amount);
       negotiationId = neg.id;
     } else {
-      const { data: cat, error: catError } = await supabaseAdmin
-        .from("categories")
-        .select("base_fee")
-        .eq("id", job.category_id)
+      const { data: openNeg } = await supabaseAdmin
+        .from("negotiations")
+        .select("id, initial_amount")
+        .eq("job_id", jobId)
+        .in("type", ["completion_adjustment", "extra_charge"])
+        .eq("status", "open")
         .maybeSingle();
-        
-      if (catError) throw appError(500, catError.message, "CATEGORY_FETCH_FAILED");
-      
-      const baseFee = cat ? Number(cat.base_fee) : 0;
-      amount = baseFee > 0 ? baseFee : 40.00;
 
+      if (openNeg) {
+        amount = Number(openNeg.initial_amount);
+        negotiationId = openNeg.id;
+      } else {
+        const calculation = await settlementService.calculateSettlement(jobId);
+        if (calculation.outstanding_balance > 0) {
+          amount = calculation.outstanding_balance;
+        } else {
+          const { data: cat, error: catError } = await supabaseAdmin
+            .from("categories")
+            .select("base_fee")
+            .eq("id", job.category_id)
+            .maybeSingle();
+            
+          if (catError) throw appError(500, catError.message, "CATEGORY_FETCH_FAILED");
+          
+          const baseFee = cat ? Number(cat.base_fee) : 0;
+          amount = baseFee > 0 ? baseFee : 40.00;
+        }
+      }
+      
       const { data: newNeg, error: newNegErr } = await supabaseAdmin
         .from("negotiations")
         .insert({
@@ -334,6 +353,22 @@ export async function verifyPayment(reference: string) {
           reference: payment.reference,
         });
 
+        try {
+          const clientWallet = await walletService.getOrCreateWallet(clientId);
+          await supabaseAdmin.from("wallet_transactions").insert({
+            wallet_id: clientWallet.id,
+            user_id: clientId,
+            job_id: jobId,
+            type: "escrow_lock",
+            amount: -depositAmount,
+            reference: payment.reference,
+            description: `Extra charge escrow deposit lock`,
+            metadata: { deposit_amount: depositAmount, extra_charge_id: extraChargeId }
+          });
+        } catch (err: any) {
+          logger("Wallet Log Extra Charge Payment Transaction Error (ignoring):", err.message);
+        }
+
         return { success: true, message: "Extra charge payment processed successfully" };
       }
 
@@ -364,7 +399,22 @@ export async function verifyPayment(reference: string) {
 
         if (neg?.type === "completion_adjustment") {
           isCompletionAdjustment = true;
-          await settlementService.processPayoutAndRelease(session.job_id, reference);
+          try {
+            const clientWallet = await walletService.getOrCreateWallet(clientId);
+            await supabaseAdmin.from("wallet_transactions").insert({
+              wallet_id: clientWallet.id,
+              user_id: clientId,
+              job_id: session.job_id,
+              type: "escrow_lock",
+              amount: -Number(session.amount),
+              reference: payment.reference,
+              description: `Final settlement payment deposit`,
+              metadata: { deposit_amount: Number(session.amount) }
+            });
+          } catch (err: any) {
+            logger("Wallet Log Settlement Payment Transaction Error (ignoring):", err.message);
+          }
+          await settlementService.processPayoutAndRelease(session.job_id, payment.reference);
         }
       }
 
@@ -484,6 +534,23 @@ export async function verifyPayment(reference: string) {
         type: "deposit",
         reference: reference,
       });
+
+      try {
+        const clientWallet = await walletService.getOrCreateWallet(clientId);
+        await supabaseAdmin.from("wallet_transactions").insert({
+          wallet_id: clientWallet.id,
+          user_id: clientId,
+          job_id: jobId,
+          type: "escrow_lock",
+          amount: -depositAmount,
+          reference: reference,
+          description: `Upfront escrow deposit lock`,
+          metadata: { deposit_amount: depositAmount }
+        });
+      } catch (err: any) {
+        logger("Wallet Log Upfront Payment Transaction Error (ignoring):", err.message);
+      }
+
       console.log(`[PAYMENT] Escrow balance and ledger successfully written`);
 
       return { success: true, message: "Payment processed successfully" };

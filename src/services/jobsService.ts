@@ -912,6 +912,14 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
   if (job.worker_id !== userId) {
     throw appError(403, "Only the assigned worker can submit completion", "FORBIDDEN");
   }
+  if (job.status === JOB_STATUS.COMPLETED) {
+    const { data: completedJob } = await supabaseAdmin
+      .from("jobs")
+      .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
+      .eq("id", jobId)
+      .maybeSingle();
+    return completedJob;
+  }
   if (![JOB_STATUS.IN_PROGRESS, JOB_STATUS.PENDING_CLIENT_APPROVAL].includes(job.status)) {
     throw appError(409, "Job must be in progress before completion", "INVALID_JOB_STATE");
   }

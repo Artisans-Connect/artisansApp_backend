@@ -3,6 +3,7 @@ import { appError } from "../utils/appError";
 import * as negotiationEngine from "./negotiationEngine";
 import * as notifyService from "./notifyService";
 import { logEvent } from "../utils/auditLogger";
+import * as walletService from "./walletService";
 import axios from "axios";
 
 const PAYSTACK_API = "https://api.paystack.co";
@@ -90,12 +91,12 @@ export async function calculateSettlement(jobId: string) {
     created_at: c.created_at,
   }));
 
-  // 4. Find if there is an accepted final_settlement negotiation
+  // 4. Find if there is an accepted completion_adjustment negotiation
   const { data: finalNeg } = await supabaseAdmin
     .from("negotiations")
     .select("id, agreed_amount")
     .eq("job_id", jobId)
-    .eq("type", "final_settlement")
+    .eq("type", "completion_adjustment")
     .eq("status", "accepted")
     .maybeSingle();
 
@@ -160,7 +161,16 @@ export async function processPayoutAndRelease(jobId: string, reference?: string)
     }
   }
 
-  // 4. Update Escrow ledger
+  // 4. Update Escrow ledger & credit worker wallet
+  await walletService.creditWallet({
+    userId: job.worker_id,
+    amount: worker_payout,
+    reference: reference || `cm_release_${Date.now()}`,
+    type: "escrow_release",
+    description: `Artisan payout for job completion`,
+    jobId: jobId,
+  });
+
   await supabaseAdmin.from("job_escrow_balances").upsert({
     job_id: jobId,
     held_amount: 0,
