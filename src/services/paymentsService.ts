@@ -457,7 +457,7 @@ export async function verifyPayment(reference: string) {
 
             console.log(`[PAYMENT] Assigned worker ${app?.worker_id} had withdrawn. Resetting job to MATCHING and triggering redispatch.`);
             
-            const matchingService = await import("./matching/assignmentService");
+            const matchingService = await import("./matching/assignmentService.js");
             void matchingService.findAndDispatch(jobId, 1);
           }
         } else {
