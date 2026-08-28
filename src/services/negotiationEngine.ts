@@ -123,20 +123,23 @@ export async function createNegotiation(params: CreateNegotiationParams) {
   if (jobError) throw appError(500, jobError.message, "JOB_FETCH_FAILED");
   if (!job) throw appError(404, "Job not found", "JOB_NOT_FOUND");
 
+  let app: any = null;
+
   // Verify that the initiator is a participant of the job
   // (Or if it's a quote negotiation, they must be the applicant or client)
   if (type === 'quote') {
     if (!applicationId) {
       throw appError(400, "Application ID is required for quote negotiations", "APPLICATION_ID_REQUIRED");
     }
-    const { data: app, error: appErrorDetail } = await supabaseAdmin
+    const { data: appData, error: appErrorDetail } = await supabaseAdmin
       .from("job_applications")
       .select("worker_id")
       .eq("id", applicationId)
       .maybeSingle();
 
     if (appErrorDetail) throw appError(500, appErrorDetail.message, "APPLICATION_FETCH_FAILED");
-    if (!app) throw appError(404, "Job application not found", "APPLICATION_NOT_FOUND");
+    if (!appData) throw appError(404, "Job application not found", "APPLICATION_NOT_FOUND");
+    app = appData;
 
     if (initiatorId !== job.client_id && initiatorId !== app.worker_id) {
       throw appError(403, "Not authorized to initiate this negotiation", "FORBIDDEN");
@@ -162,14 +165,21 @@ export async function createNegotiation(params: CreateNegotiationParams) {
     }
   }
 
-  // Check if an open negotiation of the same type already exists for this job to prevent duplicate open sessions
-  const { data: existingOpen, error: openCheckError } = await supabaseAdmin
+  // Check if an open negotiation of the same type already exists for this job (and application, for quotes)
+  let query = supabaseAdmin
     .from("negotiations")
     .select("id")
     .eq("job_id", jobId)
     .eq("type", type)
-    .eq("status", "open")
-    .maybeSingle();
+    .eq("status", "open");
+
+  if (type === 'quote' && applicationId) {
+    query = query.eq("application_id", applicationId);
+  } else {
+    query = query.is("application_id", null);
+  }
+
+  const { data: existingOpen, error: openCheckError } = await query.maybeSingle();
 
   if (openCheckError) throw appError(500, openCheckError.message, "OPEN_NEGOTIATION_CHECK_FAILED");
   if (existingOpen) {
@@ -195,12 +205,15 @@ export async function createNegotiation(params: CreateNegotiationParams) {
   if (insertError) throw appError(500, insertError.message, "NEGOTIATION_CREATE_FAILED");
 
   // 3. Create round 1
+  // In quote negotiations, the first round is always the worker's initial quote proposal
+  const proposedBy = (type === 'quote' && app) ? app.worker_id : initiatorId;
+
   const { error: roundError } = await supabaseAdmin
     .from("negotiation_rounds")
     .insert({
       negotiation_id: negotiation.id,
       round_number: 1,
-      proposed_by: initiatorId,
+      proposed_by: proposedBy,
       proposed_amount: initialAmount,
       note: description || "Negotiation initiated"
     });
