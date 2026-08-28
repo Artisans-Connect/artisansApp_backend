@@ -186,6 +186,16 @@ router.get("/callback", async (req: Request, res: Response) => {
       </style>
       <script>
         ${autoRedirectScript}
+        function closeWindow() {
+          window.close();
+          const win = window.open('', '_self');
+          if (win) {
+            win.close();
+          }
+          setTimeout(function() {
+            alert("Browser security prevented closing this tab automatically. Please close it manually, or click the Return button above.");
+          }, 300);
+        }
       </script>
     </head>
     <body>
@@ -194,7 +204,7 @@ router.get("/callback", async (req: Request, res: Response) => {
         <h1>Payment Successful!</h1>
         <p>${descriptionText}</p>
         <a href="${primaryBtnUrl}" class="btn">${primaryBtnLabel}</a>
-        <button onclick="window.open('', '_self'); window.close();" class="btn btn-secondary">Close / Return</button>
+        <button onclick="closeWindow();" class="btn btn-secondary">Close / Return</button>
       </div>
     </body>
     </html>
