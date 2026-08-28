@@ -39,7 +39,7 @@ router.get(
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
     const jobId = paramId(req.params.jobId);
-    const negotiations = await negotiationEngine.getActiveNegotiationsForJob(jobId);
+    const negotiations = await negotiationEngine.getActiveNegotiationsForJob(jobId, req.user!.id);
     res.status(200).json({ success: true, data: negotiations });
   })
 );
@@ -50,7 +50,7 @@ router.get(
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
     const id = paramId(req.params.id);
-    const negotiation = await negotiationEngine.getNegotiationState(id);
+    const negotiation = await negotiationEngine.getNegotiationState(id, req.user!.id);
     res.status(200).json({ success: true, data: negotiation });
   })
 );

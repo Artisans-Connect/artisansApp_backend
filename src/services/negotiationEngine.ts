@@ -16,7 +16,7 @@ export interface CreateNegotiationParams {
   idempotencyKey?: string;
 }
 
-export async function getNegotiationState(negotiationId: string) {
+export async function getNegotiationState(negotiationId: string, requesterId?: string) {
   const { data: negotiation, error } = await supabaseAdmin
     .from("negotiations")
     .select(`
@@ -34,10 +34,39 @@ export async function getNegotiationState(negotiationId: string) {
     negotiation.rounds.sort((a: any, b: any) => a.round_number - b.round_number);
   }
 
+  if (requesterId) {
+    const { data: job } = await supabaseAdmin
+      .from("jobs")
+      .select("client_id, worker_id")
+      .eq("id", negotiation.job_id)
+      .maybeSingle();
+
+    if (job && requesterId !== job.client_id) {
+      if (negotiation.type === 'quote') {
+        const { data: app } = await supabaseAdmin
+          .from("job_applications")
+          .select("worker_id")
+          .eq("id", negotiation.application_id)
+          .maybeSingle();
+        if (app?.worker_id !== requesterId) {
+          throw appError(403, "Not authorized to view this negotiation", "FORBIDDEN");
+        }
+      } else if (job.worker_id !== requesterId) {
+        throw appError(403, "Not authorized to view this negotiation", "FORBIDDEN");
+      }
+    }
+  }
+
   return negotiation;
 }
 
-export async function getActiveNegotiationsForJob(jobId: string) {
+export async function getActiveNegotiationsForJob(jobId: string, requesterId?: string) {
+  const { data: job } = await supabaseAdmin
+    .from("jobs")
+    .select("client_id, worker_id")
+    .eq("id", jobId)
+    .maybeSingle();
+
   const { data, error } = await supabaseAdmin
     .from("negotiations")
     .select(`
@@ -49,11 +78,29 @@ export async function getActiveNegotiationsForJob(jobId: string) {
 
   if (error) throw appError(500, error.message, "NEGOTIATIONS_FETCH_FAILED");
 
-  const negotiations = data ?? [];
+  let negotiations = data ?? [];
   for (const neg of negotiations) {
     if (neg.rounds) {
       neg.rounds.sort((a: any, b: any) => a.round_number - b.round_number);
     }
+  }
+
+  // Filter negotiations based on requester authorization if requesterId is provided
+  if (requesterId && job && requesterId !== job.client_id) {
+    const { data: workerApps } = await supabaseAdmin
+      .from("job_applications")
+      .select("id")
+      .eq("job_id", jobId)
+      .eq("worker_id", requesterId);
+
+    const workerAppIds = new Set((workerApps || []).map((a) => a.id));
+
+    negotiations = negotiations.filter((neg) => {
+      if (neg.type === 'quote') {
+        return neg.application_id && workerAppIds.has(neg.application_id);
+      }
+      return job.worker_id === requesterId;
+    });
   }
 
   return negotiations;
@@ -165,7 +212,18 @@ export async function createNegotiation(params: CreateNegotiationParams) {
   }
 
   // 4. Notifications
-  const recipientId = initiatorId === job.client_id ? job.worker_id : job.client_id;
+  let recipientId: string | null = null;
+  if (type === 'quote' && applicationId) {
+    const { data: app } = await supabaseAdmin
+      .from("job_applications")
+      .select("worker_id")
+      .eq("id", applicationId)
+      .maybeSingle();
+    recipientId = initiatorId === job.client_id ? (app?.worker_id || null) : job.client_id;
+  } else {
+    recipientId = initiatorId === job.client_id ? job.worker_id : job.client_id;
+  }
+
   if (recipientId) {
     const { data: initiatorProfile } = await supabaseAdmin
       .from("profiles")
@@ -174,7 +232,13 @@ export async function createNegotiation(params: CreateNegotiationParams) {
       .maybeSingle();
 
     const senderName = initiatorProfile?.full_name ?? "User";
-    if (type === 'extra_charge') {
+    if (type === 'quote') {
+      await notifyService.sendToUser(recipientId, {
+        title: "Bargaining Offer Update",
+        body: `${senderName} proposed a quote of GHS ${initialAmount.toFixed(2)}`,
+        data: { jobId, negotiationId: negotiation.id, type: "quote", applicationId }
+      });
+    } else if (type === 'extra_charge') {
       await notifyService.sendToUser(recipientId, {
         title: "New Extra Charge Proposed",
         body: `${senderName} proposed an extra charge of GHS ${initialAmount.toFixed(2)}`,
@@ -263,7 +327,17 @@ export async function proposeAmount(negotiationId: string, proposerId: string, a
   if (roundError) throw appError(500, roundError.message, "NEGOTIATION_ROUND_CREATE_FAILED");
 
   // Notify recipient
-  const recipientId = proposerId === job.client_id ? (job.worker_id || neg.rounds[0].proposed_by) : job.client_id;
+  let recipientId: string | null = null;
+  if (neg.type === 'quote' && neg.application_id) {
+    const { data: app } = await supabaseAdmin
+      .from("job_applications")
+      .select("worker_id")
+      .eq("id", neg.application_id)
+      .maybeSingle();
+    recipientId = proposerId === job.client_id ? (app?.worker_id || null) : job.client_id;
+  } else {
+    recipientId = proposerId === job.client_id ? (job.worker_id || rounds[0]?.proposed_by) : job.client_id;
+  }
   if (recipientId) {
     const { data: proposerProfile } = await supabaseAdmin
       .from("profiles")
