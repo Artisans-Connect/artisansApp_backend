@@ -7,7 +7,7 @@
     {
       "platform": "android",
       "label": "Android APK",
-      "href": "https://github.com/Artisans-Connect/artisansApp_frontend/releases/latest/download/CraftMatch-latest.apk",
+      "href": "https://qdeznjpvkhrxesjykovi.supabase.co/storage/v1/object/public/app-releases/CraftMatch-latest.apk",
       "version": "1.0.1",
       "fileSize": "38.5 MB",
       "fileSizeBytes": 40370176,

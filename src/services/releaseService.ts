@@ -47,6 +47,12 @@ export interface BuildStatusResponse {
   message?: string;
 }
 
+import { env } from "../config/env";
+import { supabaseAdmin } from "../config/supabase";
+
+export const APP_RELEASES_BUCKET = "app-releases";
+const SUPABASE_APP_RELEASES_URL = `${env.SUPABASE_URL.replace(/\/+$/, "")}/storage/v1/object/public/${APP_RELEASES_BUCKET}/CraftMatch-latest.apk`;
+
 const GITHUB_ORG = process.env.GITHUB_RELEASE_ORG || "Artisans-Connect";
 const GITHUB_REPO = process.env.GITHUB_RELEASE_REPO || "artisansApp_frontend";
 const GITHUB_WORKFLOW = "build-android-release.yml";
@@ -58,6 +64,38 @@ const manifestPath = path.join(downloadsDir, "release-manifest.json");
 function ensureDownloadsDirectory() {
   if (!fs.existsSync(downloadsDir)) {
     fs.mkdirSync(downloadsDir, { recursive: true });
+  }
+}
+
+/**
+ * Ensure the public app-releases bucket exists in Supabase Storage
+ */
+export async function ensureAppReleasesBucket(): Promise<void> {
+  try {
+    const { data: buckets, error } = await supabaseAdmin.storage.listBuckets();
+    if (error) {
+      logger("[ReleaseService] Warning listing storage buckets:", error.message);
+      return;
+    }
+    const exists = buckets?.some((b) => b.name === APP_RELEASES_BUCKET);
+    if (!exists) {
+      const { error: createError } = await supabaseAdmin.storage.createBucket(APP_RELEASES_BUCKET, {
+        public: true,
+        fileSizeLimit: 157286400, // 150 MB
+        allowedMimeTypes: [
+          "application/vnd.android.package-archive",
+          "application/octet-stream",
+          "application/x-zip-compressed",
+        ],
+      });
+      if (createError) {
+        logger("[ReleaseService] Error creating app-releases bucket:", createError.message);
+      } else {
+        logger("[ReleaseService] Successfully created public 'app-releases' bucket in Supabase Storage");
+      }
+    }
+  } catch (err) {
+    logger("[ReleaseService] Unexpected error ensuring app-releases bucket:", err);
   }
 }
 
@@ -74,7 +112,7 @@ const defaultPlatforms: Array<{
     label: "Android APK",
     envKey: "CRAFTMATCH_ANDROID_DOWNLOAD_URL",
     minRequirement: "Android 8.0 or newer",
-    defaultHref: `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest/download/CraftMatch-latest.apk`,
+    defaultHref: SUPABASE_APP_RELEASES_URL,
     external: false,
   },
   {
@@ -277,29 +315,56 @@ export function handleBuildWebhook(payload: {
 }
 
 /**
- * Handle manual APK upload from Admin Portal
+ * Handle manual APK upload from Admin Portal, persisting directly to Supabase Storage
  */
-export function saveUploadedApk(
+export async function saveUploadedApk(
   file: Express.Multer.File,
   metadata: { version?: string; releaseNotes?: string }
-): AppReleaseManifest {
-  ensureDownloadsDirectory();
-  const version = metadata.version?.trim() || "1.0.0";
-  const versionedTarget = path.join(downloadsDir, `CraftMatch-v${version}.apk`);
-  const latestTarget = path.join(downloadsDir, "CraftMatch-latest.apk");
+): Promise<AppReleaseManifest> {
+  await ensureAppReleasesBucket();
 
-  fs.writeFileSync(versionedTarget, file.buffer);
-  fs.writeFileSync(latestTarget, file.buffer);
+  const version = metadata.version?.trim() || "1.0.0";
+  const versionedFileName = `CraftMatch-v${version}.apk`;
+  const latestFileName = "CraftMatch-latest.apk";
 
   const hash = crypto.createHash("sha256").update(file.buffer).digest("hex");
   const sizeMB = `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+
+  // Upload both versioned APK and latest APK to Supabase Storage
+  const uploadOptions = {
+    contentType: "application/vnd.android.package-archive",
+    upsert: true,
+  };
+
+  const [resVersioned, resLatest] = await Promise.all([
+    supabaseAdmin.storage.from(APP_RELEASES_BUCKET).upload(versionedFileName, file.buffer, uploadOptions),
+    supabaseAdmin.storage.from(APP_RELEASES_BUCKET).upload(latestFileName, file.buffer, uploadOptions),
+  ]);
+
+  if (resLatest.error) {
+    logger("[ReleaseService] Error uploading CraftMatch-latest.apk to Supabase Storage:", resLatest.error.message);
+    throw appError(500, `Failed to persist APK to cloud storage: ${resLatest.error.message}`, "STORAGE_UPLOAD_FAILED");
+  }
+
+  // Also write to local downloads directory as fallback if possible
+  try {
+    ensureDownloadsDirectory();
+    fs.writeFileSync(path.join(downloadsDir, versionedFileName), file.buffer);
+    fs.writeFileSync(path.join(downloadsDir, latestFileName), file.buffer);
+  } catch (localErr) {
+    logger("[ReleaseService] Local disk write fallback failed (non-fatal):", localErr);
+  }
+
+  // Get permanent public CDN URL
+  const { data: publicUrlData } = supabaseAdmin.storage.from(APP_RELEASES_BUCKET).getPublicUrl(latestFileName);
+  const publicCdnUrl = publicUrlData.publicUrl;
 
   const current = getReleaseManifest();
   const links = current.links.map((link) => {
     if (link.platform === "android") {
       return {
         ...link,
-        href: "/api/releases/download/android",
+        href: publicCdnUrl,
         version,
         fileSize: sizeMB,
         fileSizeBytes: file.size,
@@ -311,11 +376,217 @@ export function saveUploadedApk(
     return link;
   });
 
-  return saveReleaseManifest({
+  const updatedManifest = saveReleaseManifest({
     latestVersion: version,
     releaseNotes: metadata.releaseNotes || current.releaseNotes,
     links,
   });
+
+  // Automatically prune older releases, keeping the latest 3 versioned builds
+  try {
+    await pruneOldReleases(3);
+  } catch (pruneErr) {
+    logger("[ReleaseService] Post-upload auto-pruning encountered error (non-fatal):", pruneErr);
+  }
+
+  return updatedManifest;
+}
+
+/**
+ * Prune old APK releases from Supabase Storage, keeping only the newest N versions.
+ * 'CraftMatch-latest.apk' is never removed.
+ */
+export async function pruneOldReleases(keepCount = 3): Promise<{
+  totalFound: number;
+  prunedCount: number;
+  retained: string[];
+  pruned: string[];
+}> {
+  await ensureAppReleasesBucket();
+
+  const { data: files, error } = await supabaseAdmin.storage
+    .from(APP_RELEASES_BUCKET)
+    .list("", { sortBy: { column: "created_at", order: "desc" } });
+
+  if (error) {
+    logger("[ReleaseService] Error listing files in app-releases bucket:", error.message);
+    throw appError(500, `Storage listing failed: ${error.message}`, "STORAGE_LIST_FAILED");
+  }
+
+  if (!files || files.length === 0) {
+    return { totalFound: 0, prunedCount: 0, retained: ["CraftMatch-latest.apk"], pruned: [] };
+  }
+
+  // Filter versioned files like CraftMatch-v1.0.0.apk
+  const versionedApks = files.filter(
+    (f) => f.name.startsWith("CraftMatch-v") && f.name.endsWith(".apk")
+  );
+
+  const toKeep = versionedApks.slice(0, keepCount).map((f) => f.name);
+  const toDelete = versionedApks.slice(keepCount).map((f) => f.name);
+
+  if (toDelete.length > 0) {
+    const { error: removeError } = await supabaseAdmin.storage
+      .from(APP_RELEASES_BUCKET)
+      .remove(toDelete);
+
+    if (removeError) {
+      logger("[ReleaseService] Error removing pruned APKs:", removeError.message);
+      throw appError(500, `Failed to remove pruned APKs: ${removeError.message}`, "STORAGE_DELETE_FAILED");
+    }
+    logger(`[ReleaseService] Successfully pruned ${toDelete.length} old APK release(s): ${toDelete.join(", ")}`);
+  }
+
+  return {
+    totalFound: files.length,
+    prunedCount: toDelete.length,
+    retained: ["CraftMatch-latest.apk", ...toKeep],
+    pruned: toDelete,
+  };
+}
+
+/**
+ * Identify and delete orphaned document uploads in 'verification-docs' bucket
+ * that have no corresponding database record in verification_documents.
+ */
+export async function cleanOrphanVerificationDocs(): Promise<{
+  scannedFiles: number;
+  orphanedCount: number;
+  deletedFiles: string[];
+  reclaimedBytes: number;
+}> {
+  const { data: dbDocs, error: dbErr } = await supabaseAdmin
+    .from("verification_documents")
+    .select("storage_path");
+
+  if (dbErr) {
+    logger("[ReleaseService] Error querying verification_documents for cleanup:", dbErr.message);
+    throw appError(500, dbErr.message, "DB_FETCH_FAILED");
+  }
+
+  const validPaths = new Set(
+    (dbDocs || [])
+      .map((d) => d.storage_path)
+      .filter((p): p is string => typeof p === "string" && p.length > 0)
+  );
+
+  const { data: rootItems, error: storageErr } = await supabaseAdmin.storage
+    .from("verification-docs")
+    .list("", { limit: 500 });
+
+  if (storageErr) {
+    logger("[ReleaseService] Error listing verification-docs bucket root:", storageErr.message);
+    throw appError(500, storageErr.message, "STORAGE_LIST_FAILED");
+  }
+
+  const orphansToDelete: string[] = [];
+  let reclaimedBytes = 0;
+  let scannedCount = 0;
+
+  for (const workerFolder of rootItems || []) {
+    if (!workerFolder.id && workerFolder.name) {
+      const { data: appFolders } = await supabaseAdmin.storage
+        .from("verification-docs")
+        .list(workerFolder.name, { limit: 100 });
+
+      for (const appFolder of appFolders || []) {
+        const subPath = `${workerFolder.name}/${appFolder.name}`;
+        if (!appFolder.id) {
+          const { data: docFiles } = await supabaseAdmin.storage
+            .from("verification-docs")
+            .list(subPath, { limit: 100 });
+
+          for (const docFile of docFiles || []) {
+            scannedCount++;
+            const fullPath = `${subPath}/${docFile.name}`;
+            if (!validPaths.has(fullPath)) {
+              orphansToDelete.push(fullPath);
+              reclaimedBytes += docFile.metadata?.size || 0;
+            }
+          }
+        } else {
+          scannedCount++;
+          if (!validPaths.has(subPath)) {
+            orphansToDelete.push(subPath);
+            reclaimedBytes += appFolder.metadata?.size || 0;
+          }
+        }
+      }
+    }
+  }
+
+  if (orphansToDelete.length > 0) {
+    for (let i = 0; i < orphansToDelete.length; i += 50) {
+      const chunk = orphansToDelete.slice(i, i + 50);
+      await supabaseAdmin.storage.from("verification-docs").remove(chunk);
+    }
+    logger(`[ReleaseService] Successfully cleaned ${orphansToDelete.length} orphan verification docs`);
+  }
+
+  return {
+    scannedFiles: scannedCount,
+    orphanedCount: orphansToDelete.length,
+    deletedFiles: orphansToDelete,
+    reclaimedBytes,
+  };
+}
+
+/**
+ * Query current storage utilization for App Releases and Verification Docs
+ */
+export async function getStorageStats(): Promise<{
+  appReleases: {
+    bucket: string;
+    totalFiles: number;
+    totalSizeBytes: number;
+    totalSizeMB: string;
+    files: Array<{ name: string; sizeMB: string; updatedAt: string; url: string }>;
+    publicUrl: string;
+  };
+  verificationDocs: {
+    bucket: string;
+    registeredDocsCount: number;
+  };
+}> {
+  await ensureAppReleasesBucket();
+
+  const { data: files } = await supabaseAdmin.storage
+    .from(APP_RELEASES_BUCKET)
+    .list("", { sortBy: { column: "created_at", order: "desc" } });
+
+  let totalSizeBytes = 0;
+  const fileItems = (files || []).map((f) => {
+    const size = f.metadata?.size || 0;
+    totalSizeBytes += size;
+    const { data: urlData } = supabaseAdmin.storage.from(APP_RELEASES_BUCKET).getPublicUrl(f.name);
+    return {
+      name: f.name,
+      sizeMB: `${(size / (1024 * 1024)).toFixed(1)} MB`,
+      updatedAt: f.updated_at || f.created_at || "",
+      url: urlData.publicUrl,
+    };
+  });
+
+  const { count: docsCount } = await supabaseAdmin
+    .from("verification_documents")
+    .select("*", { count: "exact", head: true });
+
+  const { data: latestUrlData } = supabaseAdmin.storage.from(APP_RELEASES_BUCKET).getPublicUrl("CraftMatch-latest.apk");
+
+  return {
+    appReleases: {
+      bucket: APP_RELEASES_BUCKET,
+      totalFiles: fileItems.length,
+      totalSizeBytes,
+      totalSizeMB: `${(totalSizeBytes / (1024 * 1024)).toFixed(1)} MB`,
+      files: fileItems,
+      publicUrl: latestUrlData.publicUrl,
+    },
+    verificationDocs: {
+      bucket: "verification-docs",
+      registeredDocsCount: docsCount || 0,
+    },
+  };
 }
 
 /**
@@ -340,10 +611,14 @@ export function resolveDownloadTarget(platform: ReleasePlatform = "android"): {
 
     const manifest = getReleaseManifest();
     const androidLink = manifest.links.find((l) => l.platform === "android");
+    const { data: latestUrlData } = supabaseAdmin.storage.from(APP_RELEASES_BUCKET).getPublicUrl("CraftMatch-latest.apk");
+    const fallbackUrl = latestUrlData.publicUrl;
+
+    // Reject dead GitHub links and safely point to persistent Supabase Storage CDN URL
     const redirectUrl =
-      androidLink?.href && androidLink.href.startsWith("http")
+      androidLink?.href && androidLink.href.startsWith("http") && !androidLink.href.includes("github.com/Artisans-Connect")
         ? androidLink.href
-        : `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest/download/CraftMatch-latest.apk`;
+        : fallbackUrl;
 
     return {
       type: "redirect",

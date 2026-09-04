@@ -121,7 +121,7 @@ router.get(
 );
 
 /**
- * Admin Endpoint: Direct drag-and-drop APK upload
+ * Admin Endpoint: Direct drag-and-drop APK upload (persists directly to Supabase Storage)
  */
 router.post(
   "/upload",
@@ -132,15 +132,60 @@ router.post(
       return res.status(400).json({ success: false, message: "No APK file uploaded" });
     }
 
-    const updated = releaseService.saveUploadedApk(req.file, {
+    const updated = await releaseService.saveUploadedApk(req.file, {
       version: typeof req.body.version === "string" ? req.body.version : undefined,
       releaseNotes: typeof req.body.releaseNotes === "string" ? req.body.releaseNotes : undefined,
     });
 
     res.status(201).json({
       success: true,
-      message: "APK file uploaded and published to distribution center",
+      message: "APK file uploaded and published to Supabase Storage distribution center",
       data: updated,
+    });
+  }),
+);
+
+/**
+ * Admin Endpoint: Query Supabase Storage utilization stats for releases & verification docs
+ */
+router.get(
+  "/storage/stats",
+  requirePortalAdmin,
+  catchAsync(async (_req: Request, res: Response) => {
+    const stats = await releaseService.getStorageStats();
+    res.status(200).json({ success: true, data: stats });
+  }),
+);
+
+/**
+ * Admin Endpoint: Trigger Supabase Storage cleanup (prune old APKs & orphan docs)
+ */
+router.post(
+  "/storage/cleanup",
+  requirePortalAdmin,
+  catchAsync(async (req: Request, res: Response) => {
+    const pruneReleases = req.body?.pruneReleases !== false;
+    const pruneOrphans = req.body?.pruneOrphans === true;
+    const keepVersionsCount = typeof req.body?.keepVersionsCount === "number" ? req.body.keepVersionsCount : 3;
+
+    const cleanupDetails: Record<string, unknown> = {};
+
+    if (pruneReleases) {
+      cleanupDetails.releases = await releaseService.pruneOldReleases(keepVersionsCount);
+    }
+    if (pruneOrphans) {
+      cleanupDetails.orphans = await releaseService.cleanOrphanVerificationDocs();
+    }
+
+    const updatedStats = await releaseService.getStorageStats();
+
+    res.status(200).json({
+      success: true,
+      message: "Storage retention cleanup executed successfully",
+      data: {
+        cleanupDetails,
+        currentStats: updatedStats,
+      },
     });
   }),
 );
