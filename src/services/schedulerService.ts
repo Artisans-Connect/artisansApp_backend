@@ -17,6 +17,7 @@ export function startScheduler(): void {
     void autoReleaseService.processAutoReleases().catch((err) => logger("Auto-release cron failed:", err));
     void paymentsService.reconcilePendingPayments().catch((err) => logger("Payment reconciliation cron failed:", err));
     void adminService.processExpiredSuspensions().catch((err) => logger("Auto-reactivation cron failed:", err));
+    void jobsService.reopenUnpaidInitialAwaitingPayments().catch((err) => logger("Unpaid awaiting_payment recovery cron failed:", err));
   });
 
   cron.schedule("0 * * * *", () => {

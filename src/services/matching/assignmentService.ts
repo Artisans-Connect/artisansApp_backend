@@ -356,11 +356,22 @@ export async function activateDueScheduledJobs(
 ): Promise<void> {
   const activateBefore = new Date(now.getTime() + leadMs).toISOString();
 
-  await supabaseAdmin
+  // Activate unconfirmed draft scheduled jobs whose scheduled_for time is within the lead window
+  const { data: dueDraftJobs, error: draftError } = await supabaseAdmin
     .from("jobs")
     .update({ status: JOB_STATUS.SEARCHING, updated_at: now.toISOString() })
     .eq("status", JOB_STATUS.DRAFT)
-    .eq("job_mode", "scheduled");
+    .eq("job_mode", "scheduled")
+    .lte("scheduled_for", activateBefore)
+    .select("id");
+
+  if (draftError) {
+    logger(`scheduled draft activation warning: ${draftError.message}`);
+  } else if (dueDraftJobs && dueDraftJobs.length > 0) {
+    for (const job of dueDraftJobs) {
+      void findAndDispatch(job.id, 1);
+    }
+  }
 
   const { data: confirmedJobs, error: confirmedError } = await supabaseAdmin
     .from("jobs")

@@ -1,6 +1,8 @@
 import { supabaseAdmin } from "../config/supabase";
 import { JOB_MODE, JOB_STATUS, MATCHING, CANCELLATION_STAGE, CANCELLATION_FEES, SETTLEMENT, WORKER_CANCELLATION_STAGE } from "../constants/enums";
 import { appError } from "../utils/appError";
+import { logger } from "../utils/logger";
+import { logEvent } from "../utils/auditLogger";
 import { haversineKm } from "../utils/haversine";
 import { completeJobSchema, createJobSchema } from "../validators/jobs.validator";
 import {
@@ -859,6 +861,120 @@ export async function sendWorkProgressCheckIns(): Promise<void> {
       await notifyService.notifyWorkProgressCheckIn(job.worker_id, job.id, "worker");
     }
   }
+}
+
+/**
+ * Cron: Recovers jobs abandoned in awaiting_payment before work starts.
+ * If client accepted an artisan but never completed initial escrow payment within timeoutMs (default 15 mins),
+ * release the artisan's availability, expire the pending application, and return the job to SEARCHING.
+ * STRICTLY ignores any jobs where started_at is NOT NULL (protecting completion extra charges and settlements).
+ */
+export async function reopenUnpaidInitialAwaitingPayments(
+  timeoutMs = 15 * 60 * 1000,
+  now = new Date(),
+): Promise<number> {
+  const cutoff = new Date(now.getTime() - timeoutMs).toISOString();
+
+  // Strictly select jobs in awaiting_payment where work has NOT started (started_at IS NULL)
+  const { data: staleJobs, error: fetchErr } = await supabaseAdmin
+    .from("jobs")
+    .select("id, worker_id, client_id, title")
+    .eq("status", JOB_STATUS.AWAITING_PAYMENT)
+    .is("started_at", null)
+    .lt("updated_at", cutoff);
+
+  if (fetchErr) {
+    logger("Error fetching stale awaiting_payment jobs:", fetchErr.message);
+    return 0;
+  }
+
+  if (!staleJobs || staleJobs.length === 0) return 0;
+
+  let recoveredCount = 0;
+  for (const job of staleJobs) {
+    try {
+      // 1. Double check held escrow balance and active payments to ensure money was not deposited
+      const { data: escrow } = await supabaseAdmin
+        .from("job_escrow_balances")
+        .select("held_amount")
+        .eq("job_id", job.id)
+        .maybeSingle();
+
+      if (escrow && Number(escrow.held_amount) > 0) {
+        // Escrow has funds! Do not revert
+        continue;
+      }
+
+      const { data: recentPay } = await supabaseAdmin
+        .from("payments")
+        .select("id")
+        .eq("job_id", job.id)
+        .in("status", ["completed", "processing"])
+        .limit(1)
+        .maybeSingle();
+
+      if (recentPay) {
+        // Payment is in flight or completed! Do not revert
+        continue;
+      }
+
+      // 2. Release assigned worker so they are not blocked
+      if (job.worker_id) {
+        await supabaseAdmin
+          .from("workers")
+          .update({ is_available: true, updated_at: now.toISOString() })
+          .eq("id", job.worker_id);
+
+        // Mark the accepted application as expired
+        await supabaseAdmin
+          .from("job_applications")
+          .update({ status: "expired" })
+          .eq("job_id", job.id)
+          .eq("worker_id", job.worker_id)
+          .eq("status", "accepted");
+
+        await notifyService.sendToUser(job.worker_id, {
+          title: "Booking Reopened",
+          body: `Initial payment for "${job.title || 'booking'}" timed out. You are now available for other requests.`,
+          data: { type: "job_reopened", jobId: job.id },
+        });
+      }
+
+      // 3. Revert job status back to SEARCHING and unassign worker
+      const { data: reverted, error: revertErr } = await supabaseAdmin
+        .from("jobs")
+        .update({
+          status: JOB_STATUS.SEARCHING,
+          worker_id: null,
+          updated_at: now.toISOString(),
+        })
+        .eq("id", job.id)
+        .eq("status", JOB_STATUS.AWAITING_PAYMENT)
+        .is("started_at", null)
+        .select("id")
+        .maybeSingle();
+
+      if (reverted) {
+        recoveredCount++;
+        matchingService.clearDispatchState(job.id);
+        void matchingService.findAndDispatch(job.id, 1);
+        await logEvent(job.id, job.client_id, "initial_payment_timeout_reopened", 0, {
+          reason: "Initial escrow deposit timed out after 15 minutes",
+          released_worker_id: job.worker_id,
+        });
+
+        await notifyService.sendToUser(job.client_id, {
+          title: "Booking Payment Timed Out",
+          body: `Your booking for "${job.title || 'service'}" was reopened to other artisans because payment was not completed in time.`,
+          data: { type: "payment_timeout", jobId: job.id },
+        });
+      }
+    } catch (err: any) {
+      logger(`Failed to recover unpaid job ${job.id}:`, err.message);
+    }
+  }
+
+  return recoveredCount;
 }
 
 export async function confirmWorkDone(userId: string, jobId: string) {

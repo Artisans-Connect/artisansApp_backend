@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import * as settlementService from "../src/services/settlementService";
 
@@ -28,4 +28,17 @@ test("processPayoutAndRelease returns already_released or handles missing job cl
   } catch (err: any) {
     assert.ok(err.code === "JOB_NOT_FOUND" || err.message?.includes("not found"), "Expected error on fake job");
   }
+});
+
+test("reopenUnpaidInitialAwaitingPayments runs cleanly and returns recovered count", async () => {
+  const { reopenUnpaidInitialAwaitingPayments } = await import("../src/services/jobsService");
+  const count = await reopenUnpaidInitialAwaitingPayments(15 * 60 * 1000);
+  assert.ok(typeof count === "number", "reopenUnpaidInitialAwaitingPayments returns count number");
+});
+
+test("activateDueScheduledJobs runs cleanly without unhandled exceptions", async () => {
+  const { activateDueScheduledJobs } = await import("../src/services/matchingService");
+  await assert.doesNotReject(async () => {
+    await activateDueScheduledJobs();
+  }, "activateDueScheduledJobs executes cleanly");
 });
