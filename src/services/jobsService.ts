@@ -14,6 +14,7 @@ import {
 import * as matchingService from "./matchingService";
 import * as notifyService from "./notifyService";
 import * as walletService from "./walletService";
+import * as settlementService from "./settlementService";
 import { isBlockedBetween } from "./blocksService";
 
 
@@ -920,7 +921,7 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
       .maybeSingle();
     return completedJob;
   }
-  if (![JOB_STATUS.IN_PROGRESS, JOB_STATUS.PENDING_CLIENT_APPROVAL].includes(job.status)) {
+  if (![JOB_STATUS.IN_PROGRESS, JOB_STATUS.PENDING_CLIENT_APPROVAL, JOB_STATUS.ARRIVED].includes(job.status)) {
     throw appError(409, "Job must be in progress before completion", "INVALID_JOB_STATE");
   }
 
@@ -1005,7 +1006,7 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)
-    .in("status", [JOB_STATUS.IN_PROGRESS, JOB_STATUS.PENDING_CLIENT_APPROVAL])
+    .in("status", [JOB_STATUS.IN_PROGRESS, JOB_STATUS.PENDING_CLIENT_APPROVAL, JOB_STATUS.ARRIVED])
     .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .maybeSingle();
 
@@ -1028,18 +1029,11 @@ export async function approveCompletion(userId: string, jobId: string) {
   }
   if (job.status === JOB_STATUS.COMPLETED) return job;
 
-  const { data, error } = await supabaseAdmin
-    .from("jobs")
-    .update({ status: JOB_STATUS.COMPLETED, updated_at: new Date().toISOString() })
-    .eq("id", jobId)
-    .select()
-    .single();
+  // Release escrow to worker wallet and finalize job
+  await settlementService.processPayoutAndRelease(jobId);
 
-  if (error) throw appError(500, error.message, "JOB_APPROVE_COMPLETION_FAILED");
-  matchingService.clearDispatchState(jobId);
-  await releaseWorkerAfterTerminalJob(job.worker_id);
-  await notifyService.notifyJobCompleted(job.client_id, jobId);
-  return data;
+  const { data: updated } = await supabaseAdmin.from("jobs").select("*").eq("id", jobId).maybeSingle();
+  return updated ?? job;
 }
 
 export async function reopenJob(userId: string, jobId: string, body: unknown) {

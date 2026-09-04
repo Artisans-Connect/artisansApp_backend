@@ -39,13 +39,14 @@ function verifyPaystackSignature(req: Request, res: Response, next: NextFunction
  */
 router.post("/initialize", authMiddleware, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { jobId, applicationId, platform } = req.body;
+    const { jobId, applicationId, platform, amount } = req.body;
     if (!jobId) {
       next(appError(400, "jobId is required", "VALIDATION_ERROR"));
       return;
     }
 
-    const result = await paymentsService.initializePayment(req.user!.id, jobId, applicationId, platform);
+    const expectedAmount = amount !== undefined && amount !== null ? Number(amount) : undefined;
+    const result = await paymentsService.initializePayment(req.user!.id, jobId, applicationId, platform, expectedAmount);
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
@@ -464,18 +465,14 @@ router.post("/settlement/:jobId/checkout", authMiddleware, idempotencyMiddleware
       return;
     }
 
-    // Initialize payment for outstanding balance:
-    // 1. Create a completion_adjustment negotiation round
-    const negotiation = await negotiationEngine.createNegotiation({
-      jobId: req.params.jobId as string,
-      type: "completion_adjustment",
-      initiatorId: req.user!.id,
-      initialAmount: calculation.outstanding_balance,
-      description: "Final completion settlement"
-    });
-
-    // 2. Initialize checkout session
-    const paymentInit = await paymentsService.initializePayment(req.user!.id, req.params.jobId as string, undefined, platform);
+    // Initialize payment for outstanding balance (initializePayment manages session reuse and calculation)
+    const paymentInit = await paymentsService.initializePayment(
+      req.user!.id,
+      req.params.jobId as string,
+      undefined,
+      platform,
+      calculation.outstanding_balance
+    );
     res.status(200).json({ success: true, data: paymentInit });
   } catch (err) {
     next(err);

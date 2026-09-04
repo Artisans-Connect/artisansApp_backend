@@ -91,19 +91,22 @@ export async function calculateSettlement(jobId: string) {
     created_at: c.created_at,
   }));
 
-  // 4. Find if there is an accepted completion_adjustment negotiation
+  // 4. Find if there is an explicit agreed price override on the whole job
   const { data: finalNeg } = await supabaseAdmin
     .from("negotiations")
-    .select("id, agreed_amount")
+    .select("id, agreed_amount, metadata")
     .eq("job_id", jobId)
     .eq("type", "completion_adjustment")
     .eq("status", "accepted")
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
-  let finalAmount = initialEscrow + totalExtra;
+  let finalAmount = Math.round((initialEscrow + totalExtra) * 100) / 100;
 
-  if (finalNeg) {
-    finalAmount = Number(finalNeg.agreed_amount);
+  // Only override final gross amount if completion_adjustment explicitly represents a whole-job price renegotiation
+  if (finalNeg && (finalNeg as any).metadata?.is_gross_override === true && finalNeg.agreed_amount != null) {
+    finalAmount = Math.round(Number(finalNeg.agreed_amount) * 100) / 100;
   }
 
   const platformFee = Math.round((finalAmount * 0.10) * 100) / 100;
@@ -126,12 +129,53 @@ export async function calculateSettlement(jobId: string) {
 }
 
 export async function processPayoutAndRelease(jobId: string, reference?: string) {
+  // Idempotency guard: check if escrow has already been released for this job
+  const { data: existingEscrow } = await supabaseAdmin
+    .from("job_escrow_balances")
+    .select("status, released_amount")
+    .eq("job_id", jobId)
+    .maybeSingle();
+
+  if (existingEscrow?.status === "released") {
+    console.log(`[SETTLEMENT] Escrow already released for job ${jobId}`);
+    return {
+      success: true,
+      worker_payout: Number(existingEscrow.released_amount || 0),
+      outstanding_balance: 0,
+      already_released: true,
+    };
+  }
+
   // 1. Fetch details
   const { worker_payout, gross_amount, platform_fee, outstanding_balance } = await calculateSettlement(jobId);
 
+  // Atomic state lock: prevent concurrent releases
+  const { data: lockedEscrow } = await supabaseAdmin
+    .from("job_escrow_balances")
+    .update({
+      held_amount: 0,
+      released_amount: worker_payout,
+      status: "released",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("job_id", jobId)
+    .neq("status", "released")
+    .select()
+    .maybeSingle();
+
+  if (!lockedEscrow && existingEscrow != null) {
+    console.log(`[SETTLEMENT] Concurrent escrow release prevented for job ${jobId}`);
+    return {
+      success: true,
+      worker_payout,
+      outstanding_balance: 0,
+      already_released: true,
+    };
+  }
+
   const { data: job } = await supabaseAdmin
     .from("jobs")
-    .select("id, worker_id, client_id")
+    .select("id, worker_id, client_id, title")
     .eq("id", jobId)
     .single();
 
@@ -167,16 +211,33 @@ export async function processPayoutAndRelease(jobId: string, reference?: string)
     amount: worker_payout,
     reference: reference || `cm_release_${Date.now()}`,
     type: "escrow_release",
-    description: `Artisan payout for job completion`,
+    description: `Artisan payout for job completion: ${job.title || 'Service'}`,
     jobId: jobId,
+    metadata: {
+      gross_amount,
+      platform_fee,
+      worker_payout,
+      job_title: job.title,
+    },
   });
 
-  await supabaseAdmin.from("job_escrow_balances").upsert({
-    job_id: jobId,
-    held_amount: 0,
-    status: "released",
-    updated_at: new Date().toISOString(),
-  });
+  // Decrement client's held escrow balance in wallet
+  try {
+    const clientWallet = await walletService.getOrCreateWallet(job.client_id);
+    const currentHeld = Number(clientWallet.held_balance || 0);
+    if (currentHeld > 0) {
+      await supabaseAdmin
+        .from("user_wallets")
+        .update({
+          held_balance: Math.max(0, Number((currentHeld - gross_amount).toFixed(2))),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", clientWallet.id);
+    }
+  } catch (err: any) {
+    console.error("Warning: failed to decrement client held balance:", err.message);
+  }
+
 
   await supabaseAdmin.from("escrow_ledger").insert({
     job_id: jobId,

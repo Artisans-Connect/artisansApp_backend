@@ -7,6 +7,7 @@ import * as notifyService from "../notifyService";
 import * as applicationsService from "../applicationsService";
 import { recordWorkerCancellation } from "../jobsService";
 import { quotePreviewForWorker } from "../workerQuoteService";
+import * as walletService from "../walletService";
 import { setWorkerAvailabilityAfterTerminalJob } from "./workerStatusService";
 
 export async function acceptJob(userId: string, jobId: string, body?: { message?: unknown; proposed_rate?: unknown }) {
@@ -268,6 +269,36 @@ export async function respondToTermination(userId: string, jobId: string, body: 
       .single();
 
     if (error) throw appError(500, error.message, "TERMINATION_ACCEPT_FAILED");
+
+    // Refund held escrow balance to client's wallet
+    const { data: escrow } = await supabaseAdmin
+      .from("job_escrow_balances")
+      .select("*")
+      .eq("job_id", jobId)
+      .maybeSingle();
+
+    if (escrow && Number(escrow.held_amount) > 0) {
+      const held = Number(escrow.held_amount);
+      const ref = `term_ref_${jobId.substring(0, 8)}_${Date.now()}`;
+      await walletService.creditWallet({
+        userId: job.client_id,
+        amount: held,
+        reference: `${ref}_client`,
+        type: "refund",
+        jobId,
+        description: `Refund for terminated job: ${job.title || 'Service'}`,
+      });
+
+      await supabaseAdmin
+        .from("job_escrow_balances")
+        .update({
+          held_amount: 0,
+          refunded_amount: held,
+          status: "refunded",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("job_id", jobId);
+    }
 
     matchingService.clearDispatchState(jobId);
     await notifyService.notifyTerminationResolved(job.client_id, jobId, true);

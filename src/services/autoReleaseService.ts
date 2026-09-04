@@ -4,9 +4,9 @@ import { JOB_STATUS } from "../constants/enums";
 import * as walletService from "./walletService";
 
 export async function processAutoReleases() {
-  const cutoffTime = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  const cutoffTime = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  // Find jobs pending approval or with work_ended_at older than 48 hours
+  // Find jobs pending approval or with work_ended_at older than 24 hours
   const { data: eligibleJobs, error } = await supabaseAdmin
     .from("jobs")
     .select("id, client_id, worker_id, title, work_ended_at, status")

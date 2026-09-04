@@ -13,7 +13,13 @@ export * from "./payments/paystackService";
 export * from "./payments/escrowService";
 export * from "./extraChargeService";
 
-export async function initializePayment(userId: string, jobId: string, applicationId?: string, platform: string = "mobile") {
+export async function initializePayment(
+  userId: string,
+  jobId: string,
+  applicationId?: string,
+  platform: string = "mobile",
+  expectedAmount?: number
+) {
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
     .select("id, client_id, status, budget_fixed, job_mode, category_id")
@@ -28,6 +34,22 @@ export async function initializePayment(userId: string, jobId: string, applicati
   let negotiationId: string | null = null;
   
   if (applicationId) {
+    // Upfront payment guard: job must be awaiting payment or in matching/draft
+    const allowedUpfrontStatuses = [JOB_STATUS.AWAITING_PAYMENT, JOB_STATUS.MATCHING, JOB_STATUS.DRAFT];
+    if (!allowedUpfrontStatuses.includes(job.status as any)) {
+      throw appError(409, "This job has already been funded or is already in progress.", "ESCROW_ALREADY_FUNDED");
+    }
+
+    const { data: escrow } = await supabaseAdmin
+      .from("job_escrow_balances")
+      .select("held_amount")
+      .eq("job_id", jobId)
+      .maybeSingle();
+
+    if (escrow && Number(escrow.held_amount) > 0) {
+      throw appError(409, "Escrow deposit is already funded for this booking.", "ESCROW_ALREADY_FUNDED");
+    }
+
     const { data: neg } = await supabaseAdmin
       .from("negotiations")
       .select("id, agreed_amount")
@@ -69,64 +91,79 @@ export async function initializePayment(userId: string, jobId: string, applicati
       negotiationId = newNeg.id;
     }
   } else {
-    const { data: neg } = await supabaseAdmin
+    // Settlement payment: calculate accurate outstanding balance from settlement service
+    const calculation = await settlementService.calculateSettlement(jobId);
+    amount = calculation.outstanding_balance;
+
+    if (amount <= 0) {
+      throw appError(400, "No outstanding balance remaining to be paid for this job.", "NO_OUTSTANDING_BALANCE");
+    }
+
+    if (expectedAmount !== undefined && Math.abs(expectedAmount - amount) > 0.01) {
+      throw appError(400, `Settlement amount mismatch: expected GHS ${amount.toFixed(2)}, got GHS ${expectedAmount.toFixed(2)}. Please refresh settlement.`, "AMOUNT_MISMATCH");
+    }
+
+    // Reuse or create completion_adjustment negotiation record
+    const { data: existingNeg } = await supabaseAdmin
       .from("negotiations")
-      .select("id, agreed_amount")
+      .select("id")
       .eq("job_id", jobId)
-      .in("type", ["completion_adjustment", "extra_charge"])
-      .eq("status", "accepted")
+      .eq("type", "completion_adjustment")
+      .in("status", ["open", "accepted"])
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
-    if (neg) {
-      amount = Number(neg.agreed_amount);
-      negotiationId = neg.id;
+    if (existingNeg) {
+      negotiationId = existingNeg.id;
     } else {
-      const { data: openNeg } = await supabaseAdmin
-        .from("negotiations")
-        .select("id, initial_amount")
-        .eq("job_id", jobId)
-        .in("type", ["completion_adjustment", "extra_charge"])
-        .eq("status", "open")
-        .maybeSingle();
-
-      if (openNeg) {
-        amount = Number(openNeg.initial_amount);
-        negotiationId = openNeg.id;
-      } else {
-        const calculation = await settlementService.calculateSettlement(jobId);
-        if (calculation.outstanding_balance > 0) {
-          amount = calculation.outstanding_balance;
-        } else {
-          const { data: cat, error: catError } = await supabaseAdmin
-            .from("categories")
-            .select("base_fee")
-            .eq("id", job.category_id)
-            .maybeSingle();
-            
-          if (catError) throw appError(500, catError.message, "CATEGORY_FETCH_FAILED");
-          
-          const baseFee = cat ? Number(cat.base_fee) : 0;
-          amount = baseFee > 0 ? baseFee : 40.00;
-        }
-      }
-      
       const { data: newNeg, error: newNegErr } = await supabaseAdmin
         .from("negotiations")
         .insert({
           job_id: jobId,
           type: "completion_adjustment",
-          status: "accepted",
+          status: "open",
           initial_amount: amount,
           agreed_amount: amount,
           initiated_by: userId,
-          accepted_by: userId
         })
         .select("id")
         .single();
-        
+
       if (newNegErr) throw appError(500, newNegErr.message, "NEGOTIATION_CREATE_FAILED");
       negotiationId = newNeg.id;
     }
+  }
+
+  // Idempotency: Check if an active, unexpired pending checkout session already exists for this job & negotiation & amount
+  const nowIso = new Date().toISOString();
+  const { data: existingSession } = await supabaseAdmin
+    .from("checkout_sessions")
+    .select("id, reference, amount, expires_at, status")
+    .eq("job_id", jobId)
+    .eq("negotiation_id", negotiationId)
+    .eq("status", "pending")
+    .gt("expires_at", nowIso)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingSession && Math.abs(Number(existingSession.amount) - amount) < 0.01) {
+    console.log(`[PAYMENT] Reusing active pending checkout session: ${existingSession.id}, reference: ${existingSession.reference}`);
+    const portalBaseUrl = (process.env.VERIFICATION_PORTAL_URL || "https://craft-match-verification-portal.vercel.app").replace(/\/$/, "");
+    const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
+    const checkout_url = isSandbox
+      ? `${portalBaseUrl}/payment-gateway/sandbox?sessionId=${existingSession.id}${platform ? `&platform=${platform}` : ""}`
+      : `${portalBaseUrl}/payment-gateway?sessionId=${existingSession.id}${platform ? `&platform=${platform}` : ""}`;
+
+    return {
+      authorization_url: checkout_url,
+      checkout_url,
+      reference: existingSession.reference,
+      session_id: existingSession.id,
+      status: "pending",
+      reused: true,
+    };
   }
 
   const amountInPesewas = Math.round(amount * 100);
@@ -264,6 +301,20 @@ export async function verifyPayment(reference: string) {
       return { success: true, message: "Payment already processed" };
     }
 
+    // Atomic state lock: prevent concurrent verification (e.g. webhook vs client polling race condition)
+    const { data: lockedPayment } = await supabaseAdmin
+      .from("payments")
+      .update({ status: "processing", updated_at: new Date().toISOString() })
+      .eq("reference", payment.reference)
+      .eq("status", "pending")
+      .select()
+      .maybeSingle();
+
+    if (!lockedPayment && payment.status !== "processing") {
+      console.log(`[PAYMENT] Payment reference: ${payment.reference} is already processed or being processed`);
+      return { success: true, message: "Payment already processed or processing" };
+    }
+
     let isSuccess = false;
     let paystackData: any = payment.paystack_payload || {};
     const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
@@ -322,7 +373,7 @@ export async function verifyPayment(reference: string) {
       if (extraChargeId) {
         const { error: payUpdateErr } = await supabaseAdmin
           .from("payments")
-          .update({ status: "completed", paystack_payload: paystackData })
+          .update({ status: "completed", paystack_payload: paystackData, updated_at: new Date().toISOString() })
           .eq("reference", payment.reference);
 
         if (payUpdateErr) throw appError(500, payUpdateErr.message, "PAYMENT_UPDATE_FAILED");
@@ -374,7 +425,7 @@ export async function verifyPayment(reference: string) {
 
       const { error: payUpdateErr } = await supabaseAdmin
         .from("payments")
-        .update({ status: "completed", paystack_payload: paystackData })
+        .update({ status: "completed", paystack_payload: paystackData, updated_at: new Date().toISOString() })
         .eq("reference", payment.reference);
 
       if (payUpdateErr) throw appError(500, payUpdateErr.message, "PAYMENT_UPDATE_FAILED");
@@ -399,7 +450,44 @@ export async function verifyPayment(reference: string) {
 
         if (neg?.type === "completion_adjustment") {
           isCompletionAdjustment = true;
+
+          // Mark all accepted extra charges for this job as paid
+          await supabaseAdmin
+            .from("negotiations")
+            .update({ status: "paid" })
+            .eq("job_id", session.job_id)
+            .eq("type", "extra_charge")
+            .eq("status", "accepted");
+
+          // Deposit settlement balance into escrow balance and ledger
+          const { data: escrow } = await supabaseAdmin
+            .from("job_escrow_balances")
+            .select("held_amount")
+            .eq("job_id", session.job_id)
+            .maybeSingle();
+
+          const currentHeld = escrow ? Number(escrow.held_amount || 0) : 0;
+          await supabaseAdmin.from("job_escrow_balances").upsert({
+            job_id: session.job_id,
+            held_amount: currentHeld + Number(session.amount),
+            status: "held",
+            updated_at: new Date().toISOString(),
+          });
+
+          await supabaseAdmin.from("escrow_ledger").insert({
+            job_id: session.job_id,
+            amount: Number(session.amount),
+            type: "deposit",
+            reference: payment.reference,
+          });
+
           try {
+            const { data: currentJob } = await supabaseAdmin
+              .from("jobs")
+              .select("title")
+              .eq("id", session.job_id)
+              .maybeSingle();
+
             const clientWallet = await walletService.getOrCreateWallet(clientId);
             await supabaseAdmin.from("wallet_transactions").insert({
               wallet_id: clientWallet.id,
@@ -408,7 +496,7 @@ export async function verifyPayment(reference: string) {
               type: "escrow_lock",
               amount: -Number(session.amount),
               reference: payment.reference,
-              description: `Final settlement payment deposit`,
+              description: `Final settlement payment for: ${currentJob?.title || 'Job'}`,
               metadata: { deposit_amount: Number(session.amount) }
             });
           } catch (err: any) {
@@ -420,7 +508,7 @@ export async function verifyPayment(reference: string) {
 
       const { data: job } = await supabaseAdmin
         .from("jobs")
-        .select("status, job_mode, excluded_worker_ids")
+        .select("status, job_mode, excluded_worker_ids, title")
         .eq("id", jobId)
         .maybeSingle();
 
@@ -546,6 +634,11 @@ export async function verifyPayment(reference: string) {
 
       try {
         const clientWallet = await walletService.getOrCreateWallet(clientId);
+        const isExtra = session?.negotiation_id != null;
+        const desc = isExtra
+          ? `Extra charge payment for: ${job?.title || 'Service'}`
+          : `Upfront escrow payment for: ${job?.title || 'Service'}`;
+
         await supabaseAdmin.from("wallet_transactions").insert({
           wallet_id: clientWallet.id,
           user_id: clientId,
@@ -553,11 +646,20 @@ export async function verifyPayment(reference: string) {
           type: "escrow_lock",
           amount: -depositAmount,
           reference: reference,
-          description: `Upfront escrow deposit lock`,
+          description: desc,
           metadata: { deposit_amount: depositAmount }
         });
+
+        // Increment client held balance
+        await supabaseAdmin
+          .from("user_wallets")
+          .update({
+            held_balance: Number((Number(clientWallet.held_balance || 0) + depositAmount).toFixed(2)),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", clientWallet.id);
       } catch (err: any) {
-        logger("Wallet Log Upfront Payment Transaction Error (ignoring):", err.message);
+        logger("Wallet Log Payment Transaction Error (ignoring):", err.message);
       }
 
       console.log(`[PAYMENT] Escrow balance and ledger successfully written`);

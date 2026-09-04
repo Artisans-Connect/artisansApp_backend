@@ -33,7 +33,7 @@ src/
 - **`jobsService` & `jobLifecycle`**: Manages the 13-state job transaction lifecycle, idempotency key checks, and atomic worker assignment locks (`one_active_worker_job_per_worker`).
 - **`negotiationEngine`**: Manages real-time protected price bargaining between client and worker, masking phone numbers until quote acceptance.
 - **`settlementService` & `extraChargeService`**: Coordinates additive on-site extra charges (+GH₵ 30), 20% booking escrow deposits, and 90/10 split settlement calculations.
-- **`autoReleaseService` & `walletService`**: Handles double-entry user wallet ledgers, escrow balances, and automated 48-hour escrow payout auto-releases.
+- **`autoReleaseService` & `walletService`**: Handles double-entry user wallet ledgers, escrow balances, and automated 24-hour escrow payout auto-releases.
 - **`verificationService`**: Generates 32-byte cryptographic handoff tokens, processes Ghana Card identity uploads, and records administrative audit logs.
 - **`smartSearchService`**: Natural-language intent extraction for 50+ local Ghanaian trade aliases via Gemini 3.5 Flash AI with regex fallback.
 - **`notifyService` & `notificationPayloads`**: Dispatches role-aware FCM push notifications and Supabase Realtime channel updates.
