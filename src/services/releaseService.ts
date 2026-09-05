@@ -32,6 +32,7 @@ export interface BuildTriggerParams {
   version?: string;
   releaseNotes?: string;
   releaseType?: "release" | "debug";
+  githubToken?: string;
 }
 
 export interface BuildStatusResponse {
@@ -81,7 +82,6 @@ export async function ensureAppReleasesBucket(): Promise<void> {
     if (!exists) {
       const { error: createError } = await supabaseAdmin.storage.createBucket(APP_RELEASES_BUCKET, {
         public: true,
-        fileSizeLimit: 157286400, // 150 MB
         allowedMimeTypes: [
           "application/vnd.android.package-archive",
           "application/octet-stream",
@@ -306,12 +306,19 @@ export function handleBuildWebhook(payload: {
     return link;
   });
 
-  return saveReleaseManifest({
+  const updated = saveReleaseManifest({
     appName: payload.appName || current.appName,
     latestVersion: payload.latestVersion,
     releaseNotes: payload.notes || current.releaseNotes,
     links,
   });
+
+  // Automatically prune older releases asynchronously keeping top 3 versions
+  pruneOldReleases(3).catch((pruneErr) => {
+    logger("[ReleaseService] Webhook post-build pruning encountered error (non-fatal):", pruneErr);
+  });
+
+  return updated;
 }
 
 /**
@@ -650,6 +657,7 @@ export async function triggerGitHubBuild(params: BuildTriggerParams): Promise<{
   workflowUrl: string;
 }> {
   const token =
+    params.githubToken?.trim() ||
     process.env.GITHUB_RELEASE_PAT ||
     process.env.GITHUB_TOKEN ||
     process.env.GH_TOKEN;
@@ -662,9 +670,9 @@ export async function triggerGitHubBuild(params: BuildTriggerParams): Promise<{
   if (!token) {
     // Return friendly instructions with direct link if token not set on server
     return {
-      success: true,
+      success: false,
       message:
-        "GitHub token not configured on server. Open GitHub Actions directly to trigger with 1-click.",
+        "GitHub token not configured on server. Provide a GitHub PAT or open GitHub Actions directly to trigger.",
       version,
       workflowUrl,
     };
