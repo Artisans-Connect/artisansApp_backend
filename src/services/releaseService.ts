@@ -312,6 +312,7 @@ export function handleBuildWebhook(payload: {
     latestVersion: payload.latestVersion,
     releaseNotes: payload.notes || current.releaseNotes,
     links,
+  });
 }
 
 /**
