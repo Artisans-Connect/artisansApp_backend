@@ -47,6 +47,8 @@ export interface BuildStatusResponse {
   updatedAt?: string;
   durationSeconds?: number;
   message?: string;
+}
+
 import { env } from "../config/env";
 import { supabaseAdmin } from "../config/supabase";
 
