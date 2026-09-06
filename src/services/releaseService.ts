@@ -376,7 +376,10 @@ export async function triggerGitHubBuild(params: BuildTriggerParams): Promise<{
     };
   } catch (err: unknown) {
     logger("[ReleaseService] Error dispatching GitHub Action", err);
-    const errorDetails = axios.isAxiosError(err) ? err.response?.data?.message || err.message : String(err);
+    let errorDetails = axios.isAxiosError(err) ? err.response?.data?.message || err.message : String(err);
+    if (axios.isAxiosError(err) && err.response?.status === 403) {
+      errorDetails = "GitHub Token missing 'Actions: Read & Write' permission. On GitHub: edit Token > Repository permissions > set 'Actions' to 'Read and Write'.";
+    }
     throw appError(
       502,
       `Failed to trigger GitHub Actions build: ${errorDetails}`,
