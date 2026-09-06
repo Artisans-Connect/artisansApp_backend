@@ -18,6 +18,14 @@ router.post(
   }),
 );
 
+router.post(
+  "/broadcast-sms",
+  catchAsync(async (req: Request, res: Response) => {
+    const result = await notificationsService.broadcastSMS(req.body);
+    res.status(201).json({ success: true, data: result });
+  }),
+);
+
 router.get(
   "/dashboard-stats",
   catchAsync(async (_req: Request, res: Response) => {

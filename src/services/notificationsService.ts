@@ -1,5 +1,7 @@
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
+import { smsProvider } from "./notificationProviders";
+import { logger } from "../utils/logger";
 
 export async function listNotifications(userId: string, limit = 20, offset = 0) {
   const { data, error } = await supabaseAdmin
@@ -112,5 +114,87 @@ export async function broadcastNotification(payload: {
     count: profilesToNotify.length,
     target: payload.target,
     title: payload.title.trim(),
+  };
+}
+
+export async function broadcastSMS(payload: {
+  target: "all" | "workers" | "clients" | "phone";
+  recipientPhone?: string;
+  title?: string;
+  message: string;
+}) {
+  if (!payload.message?.trim()) {
+    throw appError(400, "SMS message body is required", "VALIDATION_ERROR");
+  }
+
+  const messageTitle = payload.title?.trim() || "CraftMatch";
+  const messageBody = payload.message.trim();
+  const fullText = `${messageTitle}: ${messageBody}`;
+
+  if (payload.target === "phone") {
+    const phone = payload.recipientPhone?.trim();
+    if (!phone) {
+      throw appError(400, "Recipient phone number is required when target is 'phone'", "VALIDATION_ERROR");
+    }
+    const messageId = await smsProvider.send(phone, {
+      title: messageTitle,
+      body: messageBody,
+    });
+    return {
+      count: 1,
+      target: "phone",
+      recipientPhone: phone,
+      providerMessageId: messageId,
+      message: fullText,
+    };
+  }
+
+  let query = supabaseAdmin.from("profiles").select("id, phone, signup_type, last_active_mode");
+
+  if (payload.target === "workers") {
+    const { data: workers } = await supabaseAdmin.from("workers").select("id");
+    const workerIds = (workers ?? []).map((w) => w.id);
+    if (workerIds.length > 0) {
+      query = query.in("id", workerIds);
+    }
+  }
+
+  const { data: targetProfiles, error } = await query;
+  if (error) throw appError(500, error.message, "PROFILES_FETCH_FAILED");
+
+  const profilesToNotify = (targetProfiles ?? []).filter((p) => {
+    if (!p.phone || p.phone.trim().length === 0) return false;
+    if (payload.target === "workers") return true;
+    if (payload.target === "clients") return p.last_active_mode === "client" || p.signup_type === "client";
+    return true;
+  });
+
+  if (profilesToNotify.length === 0) {
+    return { count: 0, target: payload.target, message: fullText };
+  }
+
+  let sentCount = 0;
+  const failures: string[] = [];
+
+  for (const profile of profilesToNotify) {
+    try {
+      await smsProvider.send(profile.phone, {
+        title: messageTitle,
+        body: messageBody,
+      });
+      sentCount++;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      failures.push(`${profile.phone}: ${errorMsg}`);
+      logger(`[NotificationsService] SMS broadcast to ${profile.phone} failed: ${errorMsg}`);
+    }
+  }
+
+  return {
+    count: sentCount,
+    totalTargeted: profilesToNotify.length,
+    failedCount: failures.length,
+    target: payload.target,
+    message: fullText,
   };
 }
