@@ -41,15 +41,16 @@ export const fcmProvider: NotificationProvider = {
 export const smsProvider: NotificationProvider = {
   channel: "sms",
   async send(phone, payload) {
-    if (!env.HUBTEL_CLIENT_ID || !env.HUBTEL_CLIENT_SECRET || !env.HUBTEL_SENDER_ID) {
-      throw new Error("Hubtel SMS credentials are not configured");
+    if (!env.MOOLRE_API_VASKEY || !env.MOOLRE_SMS_SENDER_ID) {
+      throw new Error("Moolre SMS credentials are not configured");
     }
     const response = await axios.post(
-      env.HUBTEL_SMS_ENDPOINT,
-      { From: env.HUBTEL_SENDER_ID, To: phone, Content: `${payload.title}: ${payload.body}` },
-      { auth: { username: env.HUBTEL_CLIENT_ID, password: env.HUBTEL_CLIENT_SECRET }, timeout: 10_000 },
+      `${env.MOOLRE_API_BASE_URL}/open/sms/send`,
+      { type: 1, senderid: env.MOOLRE_SMS_SENDER_ID, messages: [{ recipient: phone, message: `${payload.title}: ${payload.body}`, ref: `cm_sms_${Date.now()}` }] },
+      { headers: { "X-API-VASKEY": env.MOOLRE_API_VASKEY, "Content-Type": "application/json" }, timeout: 10_000 },
     );
-    return String(response.data?.MessageId ?? response.data?.messageId ?? "") || undefined;
+    if (Number(response.data?.status) !== 1) throw new Error(response.data?.message || "Moolre SMS request failed");
+    return String(response.data?.data?.id ?? response.data?.data ?? response.data?.code ?? "") || undefined;
   },
 };
 

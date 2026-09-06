@@ -32,6 +32,8 @@ export interface BuildTriggerParams {
   version?: string;
   releaseNotes?: string;
   releaseType?: "release" | "debug";
+  githubToken?: string;
+  branch?: string;
 }
 
 export interface BuildStatusResponse {
@@ -375,6 +377,7 @@ export async function triggerGitHubBuild(params: BuildTriggerParams): Promise<{
   workflowUrl: string;
 }> {
   const token =
+    params.githubToken?.trim() ||
     process.env.GITHUB_RELEASE_PAT ||
     process.env.GITHUB_TOKEN ||
     process.env.GH_TOKEN;
@@ -382,14 +385,15 @@ export async function triggerGitHubBuild(params: BuildTriggerParams): Promise<{
   const version = params.version?.trim() || "1.0.0";
   const releaseNotes = params.releaseNotes?.trim() || `CraftMatch Android Release v${version}`;
   const releaseType = params.releaseType || "release";
+  const branch = params.branch?.trim() || "main";
   const workflowUrl = `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}`;
 
   if (!token) {
     // Return friendly instructions with direct link if token not set on server
     return {
-      success: true,
+      success: false,
       message:
-        "GitHub token not configured on server. Open GitHub Actions directly to trigger with 1-click.",
+        "GitHub token not configured on server. Provide a GitHub PAT or open GitHub Actions directly to trigger.",
       version,
       workflowUrl,
     };
@@ -400,7 +404,7 @@ export async function triggerGitHubBuild(params: BuildTriggerParams): Promise<{
     await axios.post(
       url,
       {
-        ref: "main",
+        ref: branch,
         inputs: {
           version,
           release_notes: releaseNotes,

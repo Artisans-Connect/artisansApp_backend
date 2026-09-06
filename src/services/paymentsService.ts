@@ -4,11 +4,12 @@ import { JOB_STATUS } from "../constants/enums";
 import { logger } from "../utils/logger";
 import { logEvent } from "../utils/auditLogger";
 import * as settlementService from "./settlementService";
+import * as moolreService from "./payments/moolreService";
 import * as paystackService from "./payments/paystackService";
 import * as escrowService from "./payments/escrowService";
 import * as extraChargeService from "./extraChargeService";
 
-export * from "./payments/paystackService";
+export * from "./payments/moolreService";
 export * from "./payments/escrowService";
 export * from "./extraChargeService";
 
@@ -114,11 +115,11 @@ export async function initializePayment(userId: string, jobId: string, applicati
 
   const { data: profile } = await supabaseAdmin
     .from("profiles")
-    .select("email")
+    .select("email, phone")
     .eq("id", userId)
     .maybeSingle();
 
-  const email = profile?.email || "customer@craftmatch.com";
+  const payer = profile?.phone || "";
   const reference = `cm_pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
@@ -140,7 +141,7 @@ export async function initializePayment(userId: string, jobId: string, applicati
 
   console.log(`[PAYMENT] Initializing payment. Client: ${userId}, Job: ${jobId}, Application: ${applicationId || 'none'}, Amount: ${amount}, Reference: ${reference}, SessionID: ${sessionId}`);
 
-  let paystackData: any = null;
+  let moolreData: any = null;
   const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
 
   const callbackBase = `${process.env.EXPRESS_API_BASE_URL || "https://artisansapp-backend.onrender.com/api"}/payments/callback`;
@@ -148,19 +149,13 @@ export async function initializePayment(userId: string, jobId: string, applicati
 
   if (!isSandbox) {
     try {
-      paystackData = await paystackService.initializeTransaction(
-        email,
-        amountInPesewas,
+      moolreData = await moolreService.initializePayment(
+        payer,
+        amount,
         reference,
-        callbackUrl,
-        {
-          job_id: jobId,
-          client_id: userId,
-          application_id: applicationId || null,
-          deposit_amount: amount,
-          checkout_session_id: sessionId,
-        }
+        `CraftMatch payment for ${jobId}`
       );
+      moolreData = { ...moolreData, metadata: { job_id: jobId, client_id: userId, deposit_amount: amount, payer, channel: process.env.MOOLRE_PAYMENT_CHANNEL || "13" } };
     } catch (err: any) {
       logger("Paystack Initialize Warning (using fallback):", err.message);
     }
@@ -171,8 +166,8 @@ export async function initializePayment(userId: string, jobId: string, applicati
     ? `${portalBaseUrl}/payment-gateway/sandbox?sessionId=${sessionId}${platform ? `&platform=${platform}` : ""}`
     : `${portalBaseUrl}/payment-gateway?sessionId=${sessionId}${platform ? `&platform=${platform}` : ""}`;
 
-  if (!paystackData) {
-    paystackData = {
+  if (!moolreData) {
+    moolreData = {
       authorization_url: checkout_url,
       reference,
       status: "pending",
@@ -185,7 +180,7 @@ export async function initializePayment(userId: string, jobId: string, applicati
     amount,
     reference,
     status: "pending",
-    paystack_payload: paystackData,
+    paystack_payload: moolreData,
   });
 
   if (payError) throw appError(500, payError.message, "PAYMENT_RECORD_FAILED");
@@ -263,12 +258,12 @@ export async function verifyPayment(reference: string) {
       };
     } else {
       try {
-        paystackData = await paystackService.verifyTransaction(payment.reference);
-        isSuccess = paystackData?.status === "success";
+        paystackData = await moolreService.paymentStatus(payment.reference);
+        const status = String(paystackData?.data?.status ?? paystackData?.data?.paymentstatus ?? paystackData?.status ?? "").toLowerCase();
+        isSuccess = ["success", "successful", "completed", "paid", "1"].includes(status);
       } catch (err: any) {
-        logger("Paystack Verify Warning (using test fallback):", err.message);
-        isSuccess = true;
-        paystackData = { status: "success", gateway_response: "Approved (Test Mode)" };
+        logger("Moolre Verify Error:", err.message);
+        throw appError(502, "Unable to verify payment with Moolre", "MOOLRE_VERIFY_ERROR");
       }
     }
     if (isSuccess) {

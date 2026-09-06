@@ -103,6 +103,8 @@ router.post(
       version: typeof req.body.version === "string" ? req.body.version : undefined,
       releaseNotes: typeof req.body.releaseNotes === "string" ? req.body.releaseNotes : undefined,
       releaseType: req.body.releaseType === "debug" ? "debug" : "release",
+      githubToken: typeof req.body.githubToken === "string" ? req.body.githubToken : undefined,
+      branch: typeof req.body.branch === "string" ? req.body.branch : undefined,
     });
     res.status(200).json({ success: true, data: result });
   }),

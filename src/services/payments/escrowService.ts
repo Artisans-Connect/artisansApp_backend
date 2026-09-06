@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "../../config/supabase";
 import { logger } from "../../utils/logger";
-import * as paystackService from "./paystackService";
+import * as moolreService from "./moolreService";
 
 export async function releaseEscrowToWorker(jobId: string) {
   const { data: escrow } = await supabaseAdmin
@@ -46,31 +46,16 @@ export async function releaseEscrowToWorker(jobId: string) {
   const workerPayout = grossAmount - platformFee;
 
   try {
-    let providerCode = "MTN";
+    let providerCode = "1";
     const net = payoutDetails.network.toLowerCase();
     if (net.includes("vodafone") || net.includes("telecel")) {
-      providerCode = "VOD";
+      providerCode = "6";
     } else if (net.includes("airtel") || net.includes("tigo")) {
-      providerCode = "ATL";
-    }
-
-    const recipientCode = await paystackService.createTransferRecipient(
-      payoutDetails.account_name,
-      payoutDetails.account_number,
-      providerCode
-    );
-
-    if (!recipientCode) {
-      throw new Error("Failed to create transfer recipient on Paystack");
+      providerCode = "7";
     }
 
     const reference = `cm_trsf_${Date.now()}`;
-    await paystackService.initiateTransfer(
-      Math.round(workerPayout * 100),
-      recipientCode,
-      `Payout for CraftMatch job ${jobId}`,
-      reference
-    );
+    await moolreService.initiateTransfer(providerCode, payoutDetails.account_number, workerPayout, reference, `Payout for CraftMatch job ${jobId}`);
 
     await supabaseAdmin
       .from("job_escrow_balances")
@@ -99,7 +84,7 @@ export async function releaseEscrowToWorker(jobId: string) {
 
     logger(`Released escrow of GHS ${grossAmount} for job ${jobId}. Worker: ${workerPayout}, Fee: ${platformFee}`);
   } catch (err: any) {
-    logger("Paystack Payout Transfer Error:", err.response?.data || err.message);
+    logger("Moolre Payout Transfer Error:", err.response?.data || err.message);
     await supabaseAdmin
       .from("job_escrow_balances")
       .update({ status: "disputed", updated_at: new Date().toISOString() })
@@ -121,7 +106,7 @@ export async function refundEscrowToClient(jobId: string, refundAmount: number) 
 
   const { data: payment } = await supabaseAdmin
     .from("payments")
-    .select("reference")
+    .select("reference, client_id, paystack_payload")
     .eq("job_id", jobId)
     .eq("status", "completed")
     .order("created_at", { ascending: false })
@@ -135,11 +120,11 @@ export async function refundEscrowToClient(jobId: string, refundAmount: number) 
 
   try {
     const reference = `cm_ref_${Date.now()}`;
-    await paystackService.initiateRefund(
-      payment.reference,
-      Math.round(refundAmount * 100),
-      `Client refund for job ${jobId}`
-    );
+    const { data: profile } = await supabaseAdmin.from("profiles").select("phone").eq("id", payment.client_id).maybeSingle();
+    const metadata = (payment.paystack_payload as any)?.metadata || {};
+    const receiver = metadata.payer || profile?.phone;
+    if (!receiver) throw new Error("Client phone number is required for Moolre refund");
+    await moolreService.initiateTransfer(metadata.channel || "13", receiver, refundAmount, reference, `Refund for CraftMatch job ${jobId}`);
 
     await supabaseAdmin
       .from("job_escrow_balances")
@@ -160,7 +145,7 @@ export async function refundEscrowToClient(jobId: string, refundAmount: number) 
 
     logger(`Refunded GHS ${refundAmount} to client for job ${jobId}`);
   } catch (err: any) {
-    logger("Paystack Refund Error:", err.response?.data || err.message);
+    logger("Moolre Refund Transfer Error:", err.response?.data || err.message);
     await supabaseAdmin
       .from("job_escrow_balances")
       .update({ status: "disputed", updated_at: new Date().toISOString() })
