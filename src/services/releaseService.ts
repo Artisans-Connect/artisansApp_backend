@@ -53,6 +53,7 @@ import { env } from "../config/env";
 import { supabaseAdmin } from "../config/supabase";
 
 export const APP_RELEASES_BUCKET = "app-releases";
+const DEFAULT_GITHUB_RELEASE_URL = "https://github.com/Artisans-Connect/artisansApp_frontend/releases/latest/download/CraftMatch-latest.apk";
 const SUPABASE_APP_RELEASES_URL = `${env.SUPABASE_URL.replace(/\/+$/, "")}/storage/v1/object/public/${APP_RELEASES_BUCKET}/CraftMatch-latest.apk`;
 
 /**
@@ -113,7 +114,7 @@ const defaultPlatforms: Array<{
     label: "Android APK",
     envKey: "CRAFTMATCH_ANDROID_DOWNLOAD_URL",
     minRequirement: "Android 8.0 or newer",
-    defaultHref: SUPABASE_APP_RELEASES_URL,
+    defaultHref: DEFAULT_GITHUB_RELEASE_URL,
     external: false,
   },
   {
@@ -731,11 +732,10 @@ export function resolveDownloadTarget(platform: ReleasePlatform = "android"): {
   if (platform === "android") {
     const manifest = getReleaseManifest();
     const androidLink = manifest.links.find((l) => l.platform === "android");
-    const { data: latestUrlData } = supabaseAdmin.storage.from(APP_RELEASES_BUCKET).getPublicUrl("CraftMatch-latest.apk");
-    const fallbackUrl = latestUrlData.publicUrl;
+    const fallbackUrl = DEFAULT_GITHUB_RELEASE_URL;
 
     const redirectUrl =
-      androidLink?.href && androidLink.href.startsWith("http") && !androidLink.href.includes("github.com/Artisans-Connect")
+      androidLink?.href && androidLink.href.startsWith("http")
         ? androidLink.href
         : fallbackUrl;
 
