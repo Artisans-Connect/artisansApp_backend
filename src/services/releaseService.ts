@@ -88,7 +88,7 @@ export async function ensureAppReleasesBucket(): Promise<void> {
 
 const GITHUB_ORG = process.env.GITHUB_RELEASE_ORG || "Artisans-Connect";
 const GITHUB_REPO = process.env.GITHUB_RELEASE_REPO || "artisansApp_frontend";
-const GITHUB_WORKFLOW = "build-android-release.yml";
+const GITHUB_WORKFLOW = process.env.GITHUB_RELEASE_WORKFLOW || "339690504";
 
 // Locate public downloads directory
 const downloadsDir = path.resolve(process.cwd(), "public", "downloads");
