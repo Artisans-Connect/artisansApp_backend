@@ -174,6 +174,7 @@ router.post(
 
     if (pruneReleases) {
       cleanupDetails.releases = await releaseService.pruneOldReleases(keepVersionsCount);
+      cleanupDetails.githubReleases = await releaseService.pruneOldGitHubReleases(keepVersionsCount);
     }
     if (pruneOrphans) {
       cleanupDetails.orphans = await releaseService.cleanOrphanVerificationDocs();

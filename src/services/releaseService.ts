@@ -578,6 +578,79 @@ export async function pruneOldReleases(keepCount = 3): Promise<{
 }
 
 /**
+ * Prune old GitHub Releases, keeping only the newest N versions.
+ */
+export async function pruneOldGitHubReleases(keepCount = 3): Promise<{
+  totalFound: number;
+  prunedCount: number;
+  retained: string[];
+  pruned: string[];
+}> {
+  const token =
+    process.env.GITHUB_RELEASE_PAT ||
+    process.env.GITHUB_TOKEN ||
+    process.env.GH_TOKEN;
+
+  if (!token) {
+    logger("[ReleaseService] Skipping GitHub release pruning (no GITHUB_TOKEN configured)");
+    return { totalFound: 0, prunedCount: 0, retained: [], pruned: [] };
+  }
+
+  try {
+    const url = `https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases?per_page=30`;
+    const response = await axios.get(url, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+
+    const releases: Array<{ id: number; tag_name: string }> = response.data || [];
+    if (releases.length <= keepCount) {
+      return {
+        totalFound: releases.length,
+        prunedCount: 0,
+        retained: releases.map((r) => r.tag_name),
+        pruned: [],
+      };
+    }
+
+    const toKeep = releases.slice(0, keepCount);
+    const toDelete = releases.slice(keepCount);
+    const deletedTags: string[] = [];
+
+    for (const rel of toDelete) {
+      try {
+        await axios.delete(
+          `https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/${rel.id}`,
+          {
+            headers: {
+              Accept: "application/vnd.github+json",
+              Authorization: `Bearer ${token}`,
+              "X-GitHub-Api-Version": "2022-11-28",
+            },
+          }
+        );
+        deletedTags.push(rel.tag_name);
+      } catch (delErr) {
+        logger(`[ReleaseService] Error deleting old GitHub release ${rel.tag_name}:`, delErr);
+      }
+    }
+
+    return {
+      totalFound: releases.length,
+      prunedCount: deletedTags.length,
+      retained: toKeep.map((r) => r.tag_name),
+      pruned: deletedTags,
+    };
+  } catch (err) {
+    logger("[ReleaseService] Error pruning GitHub releases:", err);
+    return { totalFound: 0, prunedCount: 0, retained: [], pruned: [] };
+  }
+}
+
+/**
  * Identify and delete orphaned document uploads in 'verification-docs' bucket
  */
 export async function cleanOrphanVerificationDocs(): Promise<{
