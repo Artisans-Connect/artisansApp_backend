@@ -148,6 +148,51 @@ router.post(
 );
 
 /**
+ * Admin Endpoint: Query Supabase Storage utilization stats for releases & verification docs
+ */
+router.get(
+  "/storage/stats",
+  requirePortalAdmin,
+  catchAsync(async (_req: Request, res: Response) => {
+    const stats = await releaseService.getStorageStats();
+    res.status(200).json({ success: true, data: stats });
+  }),
+);
+
+/**
+ * Admin Endpoint: Trigger Supabase Storage cleanup (prune old APKs & orphan docs)
+ */
+router.post(
+  "/storage/cleanup",
+  requirePortalAdmin,
+  catchAsync(async (req: Request, res: Response) => {
+    const pruneReleases = req.body?.pruneReleases !== false;
+    const pruneOrphans = req.body?.pruneOrphans === true;
+    const keepVersionsCount = typeof req.body?.keepVersionsCount === "number" ? req.body.keepVersionsCount : 3;
+
+    const cleanupDetails: Record<string, unknown> = {};
+
+    if (pruneReleases) {
+      cleanupDetails.releases = await releaseService.pruneOldReleases(keepVersionsCount);
+    }
+    if (pruneOrphans) {
+      cleanupDetails.orphans = await releaseService.cleanOrphanVerificationDocs();
+    }
+
+    const updatedStats = await releaseService.getStorageStats();
+
+    res.status(200).json({
+      success: true,
+      message: "Storage retention cleanup executed successfully",
+      data: {
+        cleanupDetails,
+        currentStats: updatedStats,
+      },
+    });
+  }),
+);
+
+/**
  * Admin Endpoint: Update release manifest links and settings
  */
 router.put(
