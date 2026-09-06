@@ -354,6 +354,7 @@ export async function triggerGitHubBuild(params: BuildTriggerParams): Promise<{
       {
         ref: branch,
         inputs: {
+          branch,
           version,
           release_notes: releaseNotes,
           release_type: releaseType,
