@@ -302,6 +302,19 @@ export async function withdrawApplication(workerId: string, jobId: string) {
       throw appError(400, "Cannot withdraw application after payment has been completed. Use the job cancellation flow instead.", "INVALID_APPLICATION_STATE");
     }
 
+    // Invalidate any in-flight checkout session and pending payment records so client cannot pay after worker withdraws
+    await supabaseAdmin
+      .from("checkout_sessions")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("job_id", jobId)
+      .eq("status", "pending");
+
+    await supabaseAdmin
+      .from("payments")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("job_id", jobId)
+      .eq("status", "pending");
+
     // Reset job back to searching/matching, clear worker_id
     const { error: jobUpdateErr } = await supabaseAdmin
       .from("jobs")

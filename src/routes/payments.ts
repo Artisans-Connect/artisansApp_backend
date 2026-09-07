@@ -39,13 +39,13 @@ function verifyPaystackSignature(req: Request, res: Response, next: NextFunction
  */
 router.post("/initialize", authMiddleware, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { jobId, applicationId, platform } = req.body;
+    const { jobId, applicationId, platform, returnUrl } = req.body;
     if (!jobId) {
       next(appError(400, "jobId is required", "VALIDATION_ERROR"));
       return;
     }
 
-    const result = await paymentsService.initializePayment(req.user!.id, jobId, applicationId, platform);
+    const result = await paymentsService.initializePayment(req.user!.id, jobId, applicationId, platform, returnUrl);
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
@@ -77,6 +77,7 @@ router.get("/verify/:reference", authMiddleware, async (req: Request, res: Respo
 router.get("/callback", async (req: Request, res: Response) => {
   const reference = req.query.reference as string;
   const platform = req.query.platform as string;
+  const returnUrl = req.query.returnUrl as string;
   
   if (reference) {
     try {
@@ -86,7 +87,7 @@ router.get("/callback", async (req: Request, res: Response) => {
     }
   }
 
-  const webAppUrl = (process.env.CRAFTMATCH_WEB_APP_URL || "https://artisans-app-frontend.vercel.app/").replace(/\/$/, "");
+  const webAppUrl = (returnUrl || process.env.CRAFTMATCH_WEB_APP_URL || "https://artisans-app-frontend.vercel.app/").replace(/\/$/, "");
   const isWeb = platform === "web";
   
   // Choose button text, link, and script action depending on the platform
@@ -421,7 +422,7 @@ router.post("/sandbox/callback", async (req: Request, res: Response, next: NextF
       return;
     }
 
-    const result = await paymentsService.verifyPayment(reference);
+    const result = await paymentsService.verifyPayment(reference, true);
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);

@@ -13,7 +13,13 @@ export * from "./payments/moolreService";
 export * from "./payments/escrowService";
 export * from "./extraChargeService";
 
-export async function initializePayment(userId: string, jobId: string, applicationId?: string, platform: string = "mobile") {
+export async function initializePayment(
+  userId: string, 
+  jobId: string, 
+  applicationId?: string, 
+  platform: string = "mobile",
+  returnUrl?: string
+) {
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
     .select("id, client_id, status, budget_fixed, job_mode, category_id")
@@ -162,13 +168,13 @@ export async function initializePayment(userId: string, jobId: string, applicati
   }
 
   const portalBaseUrl = (process.env.VERIFICATION_PORTAL_URL || "https://craft-match-verification-portal.vercel.app").replace(/\/$/, "");
+  const returnParam = returnUrl ? `&returnUrl=${encodeURIComponent(returnUrl)}` : "";
   const checkout_url = isSandbox
-    ? `${portalBaseUrl}/payment-gateway/sandbox?sessionId=${sessionId}${platform ? `&platform=${platform}` : ""}`
-    : `${portalBaseUrl}/payment-gateway?sessionId=${sessionId}${platform ? `&platform=${platform}` : ""}`;
+    ? `${portalBaseUrl}/#/payment-gateway/sandbox?sessionId=${sessionId}${platform ? `&platform=${platform}` : ""}${returnParam}`
+    : `${portalBaseUrl}/#/payment-gateway?sessionId=${sessionId}${platform ? `&platform=${platform}` : ""}${returnParam}`;
 
   if (!moolreData) {
     moolreData = {
-      authorization_url: checkout_url,
       reference,
       status: "pending",
     };
@@ -196,8 +202,8 @@ export async function initializePayment(userId: string, jobId: string, applicati
   };
 }
 
-export async function verifyPayment(reference: string) {
-  console.log(`[PAYMENT] Verifying payment reference/ID: ${reference}`);
+export async function verifyPayment(reference: string, simulateSandbox: boolean = false) {
+  console.log(`[PAYMENT] Verifying payment reference/ID: ${reference}, simulateSandbox: ${simulateSandbox}`);
   try {
     let query = supabaseAdmin.from("payments").select("*");
     
@@ -245,17 +251,25 @@ export async function verifyPayment(reference: string) {
     const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
 
     if (isSandbox) {
-      isSuccess = true;
-      paystackData = {
-        status: "success",
-        gateway_response: "Approved (Sandbox Mode)",
-        amount: Math.round(Number(payment.amount) * 100),
-        metadata: {
-          job_id: payment.job_id,
-          client_id: payment.client_id,
-          deposit_amount: payment.amount,
-        }
-      };
+      if (simulateSandbox) {
+        isSuccess = true;
+        paystackData = {
+          status: "success",
+          gateway_response: "Approved (Sandbox Simulation)",
+          amount: Math.round(Number(payment.amount) * 100),
+          metadata: {
+            job_id: payment.job_id,
+            client_id: payment.client_id,
+            deposit_amount: payment.amount,
+          }
+        };
+      } else if (payment.status === "completed" || paystackData?.status === "success") {
+        isSuccess = true;
+      } else {
+        // In sandbox mode without simulation trigger, payment remains pending
+        console.log(`[PAYMENT] Sandbox payment reference ${payment.reference} is still pending simulation`);
+        return { success: false, status: payment.status, message: "Sandbox payment pending simulation" };
+      }
     } else {
       try {
         paystackData = await moolreService.paymentStatus(payment.reference);
@@ -365,7 +379,7 @@ export async function verifyPayment(reference: string) {
 
       const { data: job } = await supabaseAdmin
         .from("jobs")
-        .select("status, job_mode")
+        .select("status, job_mode, worker_id")
         .eq("id", jobId)
         .maybeSingle();
 
@@ -433,12 +447,32 @@ export async function verifyPayment(reference: string) {
             }
             console.log(`[PAYMENT] Job status updated to ${nextJobStatus} and assigned to worker ${app.worker_id}`);
           }
+        } else if (job.worker_id) {
+          // If the job already has an assigned worker (e.g. direct booking or accepted negotiation without applicationId)
+          const isScheduled = job.job_mode === "scheduled";
+          nextJobStatus = isScheduled ? JOB_STATUS.SCHEDULED_CONFIRMED : JOB_STATUS.MATCHED;
+
+          await supabaseAdmin
+            .from("jobs")
+            .update({
+              status: nextJobStatus,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", jobId);
+
+          if (!isScheduled) {
+            await supabaseAdmin
+              .from("workers")
+              .update({ is_available: false, updated_at: new Date().toISOString() })
+              .eq("id", job.worker_id);
+          }
+          console.log(`[PAYMENT] Job status updated to ${nextJobStatus} for existing worker ${job.worker_id}`);
         } else {
           await supabaseAdmin
             .from("jobs")
             .update({ status: JOB_STATUS.MATCHING })
             .eq("id", jobId);
-          console.log(`[PAYMENT] Job reset to MATCHING status`);
+          console.log(`[PAYMENT] Job reset to MATCHING status (no worker assigned)`);
         }
       }
 
@@ -500,7 +534,7 @@ export async function getCheckoutSession(sessionId: string) {
   if (error) throw appError(500, error.message, "CHECKOUT_SESSION_FETCH_FAILED");
   if (!session) throw appError(404, "Checkout session not found", "CHECKOUT_SESSION_NOT_FOUND");
 
-  if (new Date() > new Date(session.expires_at)) {
+  if (session.status !== "completed" && new Date() > new Date(session.expires_at)) {
     await supabaseAdmin
       .from("checkout_sessions")
       .update({ status: "expired" })
