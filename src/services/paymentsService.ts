@@ -536,79 +536,82 @@ export async function verifyPayment(reference: string) {
 
       if (job) {
         let nextJobStatus: string = JOB_STATUS.MATCHING;
-        
-        if (applicationId) {
+        let targetWorkerId: string | null = null;
+        let targetAppId: string | null = applicationId || null;
+
+        if (targetAppId) {
           const { data: app } = await supabaseAdmin
             .from("job_applications")
             .select("worker_id, status")
-            .eq("id", applicationId)
+            .eq("id", targetAppId)
             .maybeSingle();
 
           if (app && app.status !== "withdrawn" && app.status !== "declined") {
-            const isScheduled = job.job_mode === "scheduled";
-            nextJobStatus = isScheduled ? JOB_STATUS.SCHEDULED_CONFIRMED : JOB_STATUS.MATCHED;
-            
-            await supabaseAdmin
-              .from("jobs")
-              .update({
-                worker_id: app.worker_id,
-                status: nextJobStatus,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", jobId);
+            targetWorkerId = app.worker_id;
+          }
+        }
 
+        if (!targetWorkerId && (job as any).worker_id) {
+          targetWorkerId = (job as any).worker_id;
+        }
+
+        if (targetWorkerId) {
+          const isScheduled = job.job_mode === "scheduled";
+          nextJobStatus = isScheduled ? JOB_STATUS.SCHEDULED_CONFIRMED : JOB_STATUS.MATCHED;
+
+          await supabaseAdmin
+            .from("jobs")
+            .update({
+              worker_id: targetWorkerId,
+              status: nextJobStatus,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", jobId);
+
+          if (targetAppId) {
             await supabaseAdmin
               .from("job_applications")
               .update({ status: "accepted" })
-              .eq("id", applicationId);
+              .eq("id", targetAppId);
 
             await supabaseAdmin
               .from("job_applications")
               .update({ status: "declined" })
               .eq("job_id", jobId)
-              .neq("id", applicationId)
+              .neq("id", targetAppId)
               .eq("status", "pending");
-
-            if (!isScheduled) {
-              await supabaseAdmin
-                .from("workers")
-                .update({ is_available: false, updated_at: new Date().toISOString() })
-                .eq("id", app.worker_id);
-            }
-            console.log(`[PAYMENT] Job status updated to ${nextJobStatus} and assigned to worker ${app.worker_id}`);
-
-            void notifyService
-              .notifyWorkerPaymentConfirmed(app.worker_id, jobId, job?.title)
-              .catch((err) => logger("Worker payment notification failed:", err));
           } else {
-            // Worker withdrew or was declined before payment completed!
-            // Exclude this worker from matching if they were the one assigned
-            const existingExcluded: string[] = (job as any).excluded_worker_ids ?? [];
-            const updatedExcluded = app?.worker_id
-              ? [...new Set([...existingExcluded, app.worker_id])]
-              : existingExcluded;
+            await supabaseAdmin
+              .from("job_applications")
+              .update({ status: "accepted" })
+              .eq("job_id", jobId)
+              .eq("worker_id", targetWorkerId);
 
             await supabaseAdmin
-              .from("jobs")
-              .update({
-                worker_id: null,
-                status: JOB_STATUS.MATCHING,
-                excluded_worker_ids: updatedExcluded,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", jobId);
-
-            console.log(`[PAYMENT] Assigned worker ${app?.worker_id} had withdrawn. Resetting job to MATCHING and triggering redispatch.`);
-            
-            const matchingService = await import("./matching/assignmentService.js");
-            void matchingService.findAndDispatch(jobId, 1);
+              .from("job_applications")
+              .update({ status: "declined" })
+              .eq("job_id", jobId)
+              .neq("worker_id", targetWorkerId)
+              .eq("status", "pending");
           }
+
+          if (!isScheduled) {
+            await supabaseAdmin
+              .from("workers")
+              .update({ is_available: false, updated_at: new Date().toISOString() })
+              .eq("id", targetWorkerId);
+          }
+          console.log(`[PAYMENT] Job status updated to ${nextJobStatus} and assigned to worker ${targetWorkerId}`);
+
+          void notifyService
+            .notifyWorkerPaymentConfirmed(targetWorkerId, jobId, job?.title)
+            .catch((err) => logger("Worker payment notification failed:", err));
         } else {
           await supabaseAdmin
             .from("jobs")
             .update({ status: JOB_STATUS.MATCHING })
             .eq("id", jobId);
-          console.log(`[PAYMENT] Job reset to MATCHING status`);
+          console.log(`[PAYMENT] Job reset to MATCHING status (no assigned worker found)`);
         }
       }
 
