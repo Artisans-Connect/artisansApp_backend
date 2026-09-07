@@ -298,22 +298,61 @@ export async function verifyPayment(reference: string) {
     if (fetchPayErr) throw appError(500, fetchPayErr.message, "PAYMENT_FETCH_FAILED");
     if (!payment) throw appError(404, "Payment record not found", "PAYMENT_NOT_FOUND");
     if (payment.status === "completed") {
-      console.log(`[PAYMENT] Payment reference: ${payment.reference} already processed`);
-      return { success: true, message: "Payment already processed" };
+      // If job is still awaiting_payment, complete the job transition instead of returning early
+      const jobId = payment.job_id;
+      if (jobId) {
+        const { data: currentJob } = await supabaseAdmin
+          .from("jobs")
+          .select("id, status")
+          .eq("id", jobId)
+          .maybeSingle();
+        if (!currentJob || currentJob.status !== JOB_STATUS.AWAITING_PAYMENT) {
+          console.log(`[PAYMENT] Payment reference: ${payment.reference} already processed`);
+          return { success: true, message: "Payment already processed" };
+        }
+        console.log(`[PAYMENT] Payment reference: ${payment.reference} was marked completed but job ${jobId} is still awaiting_payment. Re-applying job transitions...`);
+      } else {
+        console.log(`[PAYMENT] Payment reference: ${payment.reference} already processed`);
+        return { success: true, message: "Payment already processed" };
+      }
     }
 
     // Atomic state lock: prevent concurrent verification (e.g. webhook vs client polling race condition)
+    // Allow acquiring lock if pending or failed (from earlier poll while checkout was still ongoing)
+    const staleThreshold = new Date(Date.now() - 30 * 1000).toISOString();
+    let lockAcquired = false;
+
     const { data: lockedPayment } = await supabaseAdmin
       .from("payments")
       .update({ status: "processing", updated_at: new Date().toISOString() })
       .eq("reference", payment.reference)
-      .eq("status", "pending")
+      .in("status", ["pending", "failed"])
       .select()
       .maybeSingle();
 
-    if (!lockedPayment && payment.status !== "processing") {
-      console.log(`[PAYMENT] Payment reference: ${payment.reference} is already processed or being processed`);
-      return { success: true, message: "Payment already processed or processing" };
+    if (lockedPayment) {
+      lockAcquired = true;
+      payment = lockedPayment;
+    } else if (payment.status === "processing") {
+      // Check if stale processing lock (> 30s)
+      if (payment.updated_at && payment.updated_at < staleThreshold) {
+        const { data: staleLock } = await supabaseAdmin
+          .from("payments")
+          .update({ status: "processing", updated_at: new Date().toISOString() })
+          .eq("reference", payment.reference)
+          .eq("status", "processing")
+          .select()
+          .maybeSingle();
+        if (staleLock) {
+          lockAcquired = true;
+          payment = staleLock;
+        }
+      }
+    }
+
+    if (!lockAcquired && payment.status !== "completed") {
+      console.log(`[PAYMENT] Payment reference: ${payment.reference} is currently being processed by another request`);
+      return { success: false, message: "Payment verification in progress. Please wait." };
     }
 
     let isSuccess = false;
@@ -509,7 +548,7 @@ export async function verifyPayment(reference: string) {
 
       const { data: job } = await supabaseAdmin
         .from("jobs")
-        .select("status, job_mode, excluded_worker_ids, title")
+        .select("status, job_mode, excluded_worker_ids, title, worker_id")
         .eq("id", jobId)
         .maybeSingle();
 
@@ -553,6 +592,20 @@ export async function verifyPayment(reference: string) {
 
         if (!targetWorkerId && (job as any).worker_id) {
           targetWorkerId = (job as any).worker_id;
+        }
+
+        if (!targetWorkerId) {
+          const { data: acceptedApp } = await supabaseAdmin
+            .from("job_applications")
+            .select("worker_id, id")
+            .eq("job_id", jobId)
+            .eq("status", "accepted")
+            .maybeSingle();
+          if (acceptedApp) {
+            targetWorkerId = acceptedApp.worker_id;
+            targetAppId = acceptedApp.id;
+            console.log(`[PAYMENT] Resolved targetWorkerId from accepted application: ${targetWorkerId}`);
+          }
         }
 
         if (targetWorkerId) {
@@ -674,14 +727,23 @@ export async function verifyPayment(reference: string) {
 
       return { success: true, message: "Payment processed successfully" };
     } else {
+      const isTerminalFailure = paystackData?.status === "failed" || paystackData?.status === "reversed";
+      const newStatus = isTerminalFailure ? "failed" : "pending";
       await supabaseAdmin
         .from("payments")
-        .update({ status: "failed", paystack_payload: paystackData })
+        .update({ status: newStatus, paystack_payload: paystackData, updated_at: new Date().toISOString() })
         .eq("reference", reference);
 
-      return { success: false, message: `Payment failed: ${paystackData?.status}` };
+      return { success: false, message: `Payment not yet completed: ${paystackData?.status || "pending"}` };
     }
   } catch (err: any) {
+    try {
+      await supabaseAdmin
+        .from("payments")
+        .update({ status: "pending", updated_at: new Date().toISOString() })
+        .eq("reference", reference)
+        .eq("status", "processing");
+    } catch (_) {}
     logger("Paystack Verify Error:", err.response?.data || err.message);
     throw appError(
       err.response?.status || 500,
