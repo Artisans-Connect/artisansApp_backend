@@ -8,6 +8,7 @@ import * as paystackService from "./payments/paystackService";
 import * as escrowService from "./payments/escrowService";
 import * as extraChargeService from "./extraChargeService";
 import * as walletService from "./walletService";
+import * as notifyService from "./notifyService";
 
 export * from "./payments/paystackService";
 export * from "./payments/escrowService";
@@ -575,6 +576,10 @@ export async function verifyPayment(reference: string) {
                 .eq("id", app.worker_id);
             }
             console.log(`[PAYMENT] Job status updated to ${nextJobStatus} and assigned to worker ${app.worker_id}`);
+
+            void notifyService
+              .notifyWorkerPaymentConfirmed(app.worker_id, jobId, job?.title)
+              .catch((err) => logger("Worker payment notification failed:", err));
           } else {
             // Worker withdrew or was declined before payment completed!
             // Exclude this worker from matching if they were the one assigned
