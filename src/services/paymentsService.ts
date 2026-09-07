@@ -8,6 +8,8 @@ import * as moolreService from "./payments/moolreService";
 import * as paystackService from "./payments/paystackService";
 import * as escrowService from "./payments/escrowService";
 import * as extraChargeService from "./extraChargeService";
+import * as walletService from "./walletService";
+import * as notifyService from "./notifyService";
 
 export * from "./payments/moolreService";
 export * from "./payments/escrowService";
@@ -446,6 +448,32 @@ export async function verifyPayment(reference: string, simulateSandbox: boolean 
                 .eq("id", app.worker_id);
             }
             console.log(`[PAYMENT] Job status updated to ${nextJobStatus} and assigned to worker ${app.worker_id}`);
+
+            void notifyService
+              .notifyWorkerPaymentConfirmed(app.worker_id, jobId, job?.title)
+              .catch((err) => logger("Worker payment notification failed:", err));
+          } else {
+            // Worker withdrew or was declined before payment completed!
+            // Exclude this worker from matching if they were the one assigned
+            const existingExcluded: string[] = (job as any).excluded_worker_ids ?? [];
+            const updatedExcluded = app?.worker_id
+              ? [...new Set([...existingExcluded, app.worker_id])]
+              : existingExcluded;
+
+            await supabaseAdmin
+              .from("jobs")
+              .update({
+                worker_id: null,
+                status: JOB_STATUS.MATCHING,
+                excluded_worker_ids: updatedExcluded,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", jobId);
+
+            console.log(`[PAYMENT] Assigned worker ${app?.worker_id} had withdrawn. Resetting job to MATCHING and triggering redispatch.`);
+            
+            const matchingService = await import("./matching/assignmentService.js");
+            void matchingService.findAndDispatch(jobId, 1);
           }
         } else if (job.worker_id) {
           // If the job already has an assigned worker (e.g. direct booking or accepted negotiation without applicationId)

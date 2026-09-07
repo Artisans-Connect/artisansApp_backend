@@ -206,6 +206,22 @@ export async function notifyWorkerApplicationAccepted(
   });
 }
 
+export async function notifyWorkerPaymentConfirmed(
+  workerId: string,
+  jobId: string,
+  jobTitle?: string,
+): Promise<void> {
+  await sendToUser(workerId, {
+    title: "Booking confirmed!",
+    body: `Payment completed for ${jobTitle || "your job"}. You can now start!`,
+    data: buildNotificationData("job_application_accepted", {
+      jobId,
+      jobTitle: jobTitle || "Job",
+      roleTarget: "worker",
+    }),
+  });
+}
+
 export async function notifyJobStarted(clientId: string, jobId: string): Promise<void> {
   await sendToUser(clientId, {
     title: "Work started",
