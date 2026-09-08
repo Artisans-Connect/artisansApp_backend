@@ -150,7 +150,7 @@ export async function initializePayment(
     .maybeSingle();
 
   if (existingSession && Math.abs(Number(existingSession.amount) - amount) < 0.01) {
-    console.log(`[PAYMENT] Reusing active pending checkout session: ${existingSession.id}, reference: ${existingSession.reference}`);
+    logger(`[PAYMENT] Reusing active pending checkout session: ${existingSession.id}, reference: ${existingSession.reference}`);
     const portalBaseUrl = (process.env.VERIFICATION_PORTAL_URL || "https://craft-match-verification-portal.vercel.app").replace(/\/$/, "");
     const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
     const checkout_url = isSandbox
@@ -195,7 +195,7 @@ export async function initializePayment(
   if (sessError) throw appError(500, sessError.message, "CHECKOUT_SESSION_CREATE_FAILED");
   const sessionId = session.id;
 
-  console.log(`[PAYMENT] Initializing payment. Client: ${userId}, Job: ${jobId}, Application: ${applicationId || 'none'}, Amount: ${amount}, Reference: ${reference}, SessionID: ${sessionId}`);
+  logger(`[PAYMENT] Initializing payment. Client: ${userId}, Job: ${jobId}, Application: ${applicationId || 'none'}, Amount: ${amount}, Reference: ${reference}, SessionID: ${sessionId}`);
 
   let paystackData: any = null;
   const isSandbox = process.env.USE_SANDBOX_PAYMENTS === "true";
@@ -249,7 +249,7 @@ export async function initializePayment(
 
   await logEvent(jobId, userId, "payment_initialized", amount, { reference, applicationId });
 
-  console.log(`[PAYMENT] Payment initialized successfully. Checkout URL: ${checkout_url}`);
+  logger(`[PAYMENT] Payment initialized successfully. Checkout URL: ${checkout_url}`);
 
   return {
     reference,
@@ -258,8 +258,203 @@ export async function initializePayment(
   };
 }
 
+async function recoverCompletedPaymentJobTransition(payment: any, currentJob: any) {
+  const jobId = payment.job_id;
+  const clientId = payment.client_id;
+  const paystackData = payment.paystack_payload || {};
+  const metadata = paystackData.metadata || {};
+  let applicationId = metadata.application_id;
+  const depositAmount = Number(metadata.deposit_amount || payment.amount || 0);
+
+  if (!applicationId) {
+    const { data: sess } = await supabaseAdmin
+      .from("checkout_sessions")
+      .select("negotiation_id")
+      .or(`reference.eq.${payment.reference},id.eq.${payment.reference}`)
+      .maybeSingle();
+
+    if (sess?.negotiation_id) {
+      const { data: neg } = await supabaseAdmin
+        .from("negotiations")
+        .select("application_id")
+        .eq("id", sess.negotiation_id)
+        .maybeSingle();
+      if (neg?.application_id) {
+        applicationId = neg.application_id;
+        logger(`[PAYMENT] Recovery resolved applicationId: ${applicationId}`);
+      }
+    }
+  }
+
+  let nextJobStatus: string = JOB_STATUS.MATCHING;
+  let targetWorkerId: string | null = null;
+  let targetAppId: string | null = applicationId || null;
+
+  if (targetAppId) {
+    const { data: app } = await supabaseAdmin
+      .from("job_applications")
+      .select("worker_id, status")
+      .eq("id", targetAppId)
+      .maybeSingle();
+
+    if (app && app.status !== "withdrawn" && app.status !== "declined") {
+      targetWorkerId = app.worker_id;
+    }
+  }
+
+  if (!targetWorkerId && (currentJob as any).worker_id) {
+    targetWorkerId = (currentJob as any).worker_id;
+  }
+
+  if (!targetWorkerId) {
+    const { data: acceptedApp } = await supabaseAdmin
+      .from("job_applications")
+      .select("worker_id, id")
+      .eq("job_id", jobId)
+      .eq("status", "accepted")
+      .maybeSingle();
+    if (acceptedApp) {
+      targetWorkerId = acceptedApp.worker_id;
+      targetAppId = acceptedApp.id;
+      logger(`[PAYMENT] Recovery resolved targetWorkerId from accepted application: ${targetWorkerId}`);
+    }
+  }
+
+  if (targetWorkerId) {
+    const isScheduled = currentJob.job_mode === "scheduled";
+    nextJobStatus = isScheduled ? JOB_STATUS.SCHEDULED_CONFIRMED : JOB_STATUS.MATCHED;
+
+    const { data: updatedJob } = await supabaseAdmin
+      .from("jobs")
+      .update({
+        worker_id: targetWorkerId,
+        status: nextJobStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .eq("status", JOB_STATUS.AWAITING_PAYMENT)
+      .select()
+      .maybeSingle();
+
+    if (!updatedJob) {
+      logger(`[PAYMENT] Recovery: Job ${jobId} was already transitioned concurrently`);
+      return { success: true, message: "Payment already processed" };
+    }
+
+    if (targetAppId) {
+      await supabaseAdmin
+        .from("job_applications")
+        .update({ status: "accepted" })
+        .eq("id", targetAppId);
+
+      await supabaseAdmin
+        .from("job_applications")
+        .update({ status: "declined" })
+        .eq("job_id", jobId)
+        .neq("id", targetAppId)
+        .eq("status", "pending");
+    } else {
+      await supabaseAdmin
+        .from("job_applications")
+        .update({ status: "accepted" })
+        .eq("job_id", jobId)
+        .eq("worker_id", targetWorkerId);
+
+      await supabaseAdmin
+        .from("job_applications")
+        .update({ status: "declined" })
+        .eq("job_id", jobId)
+        .neq("worker_id", targetWorkerId)
+        .eq("status", "pending");
+    }
+
+    if (!isScheduled) {
+      await supabaseAdmin
+        .from("workers")
+        .update({ is_available: false, updated_at: new Date().toISOString() })
+        .eq("id", targetWorkerId);
+    }
+    logger(`[PAYMENT] Recovery: Job status updated to ${nextJobStatus} and assigned to worker ${targetWorkerId}`);
+
+    void notifyService
+      .notifyWorkerPaymentConfirmed(targetWorkerId, jobId, currentJob?.title)
+      .catch((err) => logger("Worker payment notification failed:", err));
+  } else {
+    await supabaseAdmin
+      .from("jobs")
+      .update({ status: JOB_STATUS.MATCHING })
+      .eq("id", jobId)
+      .eq("status", JOB_STATUS.AWAITING_PAYMENT);
+    logger(`[PAYMENT] Recovery: Job reset to MATCHING status (no assigned worker found)`);
+  }
+
+  const { data: existingLedger } = await supabaseAdmin
+    .from("escrow_ledger")
+    .select("id")
+    .eq("reference", payment.reference)
+    .maybeSingle();
+
+  if (!existingLedger && depositAmount > 0) {
+    logger(`[PAYMENT] Recovery: Depositing GHS ${depositAmount} into escrow for job ${jobId}`);
+    const { data: existingEscrow } = await supabaseAdmin
+      .from("job_escrow_balances")
+      .select("held_amount")
+      .eq("job_id", jobId)
+      .maybeSingle();
+
+    const currentHeld = existingEscrow ? Number(existingEscrow.held_amount || 0) : 0;
+
+    await supabaseAdmin.from("job_escrow_balances").upsert({
+      job_id: jobId,
+      held_amount: currentHeld + depositAmount,
+      released_amount: 0.00,
+      refunded_amount: 0.00,
+      status: "held",
+      updated_at: new Date().toISOString(),
+    });
+
+    await supabaseAdmin.from("escrow_ledger").insert({
+      job_id: jobId,
+      amount: depositAmount,
+      type: "deposit",
+      reference: payment.reference,
+    });
+
+    try {
+      const clientWallet = await walletService.getOrCreateWallet(clientId);
+      await supabaseAdmin.from("wallet_transactions").insert({
+        wallet_id: clientWallet.id,
+        user_id: clientId,
+        job_id: jobId,
+        type: "escrow_lock",
+        amount: -depositAmount,
+        reference: payment.reference,
+        description: `Upfront escrow payment for: ${currentJob?.title || 'Service'}`,
+        metadata: { deposit_amount: depositAmount }
+      });
+
+      await supabaseAdmin
+        .from("user_wallets")
+        .update({
+          held_balance: Number((Number(clientWallet.held_balance || 0) + depositAmount).toFixed(2)),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", clientWallet.id);
+    } catch (err: any) {
+      logger("Wallet Log Payment Transaction Error (ignoring):", err.message);
+    }
+  }
+
+  await supabaseAdmin
+    .from("checkout_sessions")
+    .update({ status: "completed" })
+    .eq("reference", payment.reference);
+
+  return { success: true, message: "Payment recovery processed successfully" };
+}
+
 export async function verifyPayment(reference: string) {
-  console.log(`[PAYMENT] Verifying payment reference/ID: ${reference}`);
+  logger(`[PAYMENT] Verifying payment reference/ID: ${reference}`);
   try {
     let query = supabaseAdmin.from("payments").select("*");
     
@@ -303,16 +498,17 @@ export async function verifyPayment(reference: string) {
       if (jobId) {
         const { data: currentJob } = await supabaseAdmin
           .from("jobs")
-          .select("id, status")
+          .select("id, status, job_mode, title, worker_id")
           .eq("id", jobId)
           .maybeSingle();
         if (!currentJob || currentJob.status !== JOB_STATUS.AWAITING_PAYMENT) {
-          console.log(`[PAYMENT] Payment reference: ${payment.reference} already processed`);
+          logger(`[PAYMENT] Payment reference: ${payment.reference} already processed`);
           return { success: true, message: "Payment already processed" };
         }
-        console.log(`[PAYMENT] Payment reference: ${payment.reference} was marked completed but job ${jobId} is still awaiting_payment. Re-applying job transitions...`);
+        logger(`[PAYMENT] Payment reference: ${payment.reference} was marked completed but job ${jobId} is still awaiting_payment. Recovering job transitions...`);
+        return await recoverCompletedPaymentJobTransition(payment, currentJob);
       } else {
-        console.log(`[PAYMENT] Payment reference: ${payment.reference} already processed`);
+        logger(`[PAYMENT] Payment reference: ${payment.reference} already processed`);
         return { success: true, message: "Payment already processed" };
       }
     }
@@ -350,8 +546,8 @@ export async function verifyPayment(reference: string) {
       }
     }
 
-    if (!lockAcquired && payment.status !== "completed") {
-      console.log(`[PAYMENT] Payment reference: ${payment.reference} is currently being processed by another request`);
+    if (!lockAcquired) {
+      logger(`[PAYMENT] Payment reference: ${payment.reference} is currently being processed by another request`);
       return { success: false, message: "Payment verification in progress. Please wait." };
     }
 
@@ -376,9 +572,13 @@ export async function verifyPayment(reference: string) {
         paystackData = await paystackService.verifyTransaction(payment.reference);
         isSuccess = paystackData?.status === "success";
       } catch (err: any) {
-        logger("Paystack Verify Warning (using test fallback):", err.message);
-        isSuccess = true;
-        paystackData = { status: "success", gateway_response: "Approved (Test Mode)" };
+        if (process.env.NODE_ENV !== "production" && process.env.ALLOW_PAYMENT_TEST_FALLBACK === "true") {
+          logger("Paystack Verify Warning (using test fallback):", err.message);
+          isSuccess = true;
+          paystackData = { status: "success", gateway_response: "Approved (Test Mode)" };
+        } else {
+          throw err;
+        }
       }
     }
     if (isSuccess) {
@@ -405,7 +605,7 @@ export async function verifyPayment(reference: string) {
             .maybeSingle();
           if (neg?.application_id) {
             applicationId = neg.application_id;
-            console.log(`[PAYMENT] Resolved applicationId from database: ${applicationId}`);
+            logger(`[PAYMENT] Resolved applicationId from database: ${applicationId}`);
           }
         }
       }
@@ -604,7 +804,7 @@ export async function verifyPayment(reference: string) {
           if (acceptedApp) {
             targetWorkerId = acceptedApp.worker_id;
             targetAppId = acceptedApp.id;
-            console.log(`[PAYMENT] Resolved targetWorkerId from accepted application: ${targetWorkerId}`);
+            logger(`[PAYMENT] Resolved targetWorkerId from accepted application: ${targetWorkerId}`);
           }
         }
 
@@ -654,7 +854,7 @@ export async function verifyPayment(reference: string) {
               .update({ is_available: false, updated_at: new Date().toISOString() })
               .eq("id", targetWorkerId);
           }
-          console.log(`[PAYMENT] Job status updated to ${nextJobStatus} and assigned to worker ${targetWorkerId}`);
+          logger(`[PAYMENT] Job status updated to ${nextJobStatus} and assigned to worker ${targetWorkerId}`);
 
           void notifyService
             .notifyWorkerPaymentConfirmed(targetWorkerId, jobId, job?.title)
@@ -664,66 +864,74 @@ export async function verifyPayment(reference: string) {
             .from("jobs")
             .update({ status: JOB_STATUS.MATCHING })
             .eq("id", jobId);
-          console.log(`[PAYMENT] Job reset to MATCHING status (no assigned worker found)`);
+          logger(`[PAYMENT] Job reset to MATCHING status (no assigned worker found)`);
         }
       }
 
-      console.log(`[PAYMENT] Depositing GHS ${depositAmount} into escrow for job ${jobId}`);
-      const { data: existingEscrow } = await supabaseAdmin
-        .from("job_escrow_balances")
-        .select("held_amount")
-        .eq("job_id", jobId)
+      const { data: existingLedger } = await supabaseAdmin
+        .from("escrow_ledger")
+        .select("id")
+        .eq("reference", reference)
         .maybeSingle();
 
-      const currentHeld = existingEscrow ? Number(existingEscrow.held_amount || 0) : 0;
+      if (!existingLedger && depositAmount > 0) {
+        logger(`[PAYMENT] Depositing GHS ${depositAmount} into escrow for job ${jobId}`);
+        const { data: existingEscrow } = await supabaseAdmin
+          .from("job_escrow_balances")
+          .select("held_amount")
+          .eq("job_id", jobId)
+          .maybeSingle();
 
-      await supabaseAdmin.from("job_escrow_balances").upsert({
-        job_id: jobId,
-        held_amount: currentHeld + depositAmount,
-        released_amount: 0.00,
-        refunded_amount: 0.00,
-        status: "held",
-        updated_at: new Date().toISOString(),
-      });
+        const currentHeld = existingEscrow ? Number(existingEscrow.held_amount || 0) : 0;
 
-      await supabaseAdmin.from("escrow_ledger").insert({
-        job_id: jobId,
-        amount: depositAmount,
-        type: "deposit",
-        reference: reference,
-      });
-
-      try {
-        const clientWallet = await walletService.getOrCreateWallet(clientId);
-        const isExtra = session?.negotiation_id != null;
-        const desc = isExtra
-          ? `Extra charge payment for: ${job?.title || 'Service'}`
-          : `Upfront escrow payment for: ${job?.title || 'Service'}`;
-
-        await supabaseAdmin.from("wallet_transactions").insert({
-          wallet_id: clientWallet.id,
-          user_id: clientId,
+        await supabaseAdmin.from("job_escrow_balances").upsert({
           job_id: jobId,
-          type: "escrow_lock",
-          amount: -depositAmount,
-          reference: reference,
-          description: desc,
-          metadata: { deposit_amount: depositAmount }
+          held_amount: currentHeld + depositAmount,
+          released_amount: 0.00,
+          refunded_amount: 0.00,
+          status: "held",
+          updated_at: new Date().toISOString(),
         });
 
-        // Increment client held balance
-        await supabaseAdmin
-          .from("user_wallets")
-          .update({
-            held_balance: Number((Number(clientWallet.held_balance || 0) + depositAmount).toFixed(2)),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", clientWallet.id);
-      } catch (err: any) {
-        logger("Wallet Log Payment Transaction Error (ignoring):", err.message);
+        await supabaseAdmin.from("escrow_ledger").insert({
+          job_id: jobId,
+          amount: depositAmount,
+          type: "deposit",
+          reference: reference,
+        });
+
+        try {
+          const clientWallet = await walletService.getOrCreateWallet(clientId);
+          const isExtra = session?.negotiation_id != null;
+          const desc = isExtra
+            ? `Extra charge payment for: ${job?.title || 'Service'}`
+            : `Upfront escrow payment for: ${job?.title || 'Service'}`;
+
+          await supabaseAdmin.from("wallet_transactions").insert({
+            wallet_id: clientWallet.id,
+            user_id: clientId,
+            job_id: jobId,
+            type: "escrow_lock",
+            amount: -depositAmount,
+            reference: reference,
+            description: desc,
+            metadata: { deposit_amount: depositAmount }
+          });
+
+          // Increment client held balance
+          await supabaseAdmin
+            .from("user_wallets")
+            .update({
+              held_balance: Number((Number(clientWallet.held_balance || 0) + depositAmount).toFixed(2)),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", clientWallet.id);
+        } catch (err: any) {
+          logger("Wallet Log Payment Transaction Error (ignoring):", err.message);
+        }
       }
 
-      console.log(`[PAYMENT] Escrow balance and ledger successfully written`);
+      logger(`[PAYMENT] Escrow balance and ledger successfully written`);
 
       return { success: true, message: "Payment processed successfully" };
     } else {
