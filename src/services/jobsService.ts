@@ -1114,7 +1114,7 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
 
   if (detailsError) throw appError(500, detailsError.message, "JOB_COMPLETION_DETAILS_FAILED");
 
-  const { data, error } = await supabaseAdmin
+  const { error: updateError } = await supabaseAdmin
     .from("jobs")
     .update({
       status: JOB_STATUS.PENDING_CLIENT_APPROVAL,
@@ -1122,16 +1122,27 @@ export async function completeJobWithDetails(userId: string, jobId: string, body
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)
-    .in("status", [JOB_STATUS.IN_PROGRESS, JOB_STATUS.PENDING_CLIENT_APPROVAL, JOB_STATUS.ARRIVED])
+    .in("status", [JOB_STATUS.IN_PROGRESS, JOB_STATUS.PENDING_CLIENT_APPROVAL, JOB_STATUS.ARRIVED]);
+
+  if (updateError) throw appError(500, updateError.message, "JOB_COMPLETE_FAILED");
+
+  const { data, error: fetchError } = await supabaseAdmin
+    .from("jobs")
     .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
+    .eq("id", jobId)
     .maybeSingle();
 
-  if (error) throw appError(500, error.message, "JOB_COMPLETE_FAILED");
-  if (!data) throw appError(409, "Job status was modified concurrently. Please refresh.", "CONCURRENT_STATUS_CHANGE");
+  if (fetchError) throw appError(500, fetchError.message, "JOB_FETCH_FAILED");
+  if (!data) throw appError(404, "Job not found", "JOB_NOT_FOUND");
 
   matchingService.clearDispatchState(jobId);
   await releaseWorkerAfterTerminalJob(job.worker_id);
-  await notifyService.notifyCompletionSubmitted(job.client_id, jobId);
+
+  try {
+    await notifyService.notifyCompletionSubmitted(job.client_id, jobId);
+  } catch (notifyErr: any) {
+    logger("Failed to send completion notification (ignoring):", notifyErr.message || notifyErr);
+  }
 
   return data;
 }
