@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as releaseService from "../src/services/releaseService";
 
-test("getReleaseManifest default android link points to Supabase Storage CDN rather than GitHub", () => {
+test("getReleaseManifest default android link points to official GitHub Release assets CDN", () => {
   const manifest = releaseService.getReleaseManifest();
   assert.ok(manifest);
   assert.equal(manifest.appName, "CraftMatch");
@@ -11,29 +11,19 @@ test("getReleaseManifest default android link points to Supabase Storage CDN rat
   assert.ok(androidLink);
   assert.equal(androidLink.available, true);
   assert.ok(
-    androidLink.href.includes("supabase.co/storage/v1/object/public/app-releases"),
-    `Expected Supabase Storage CDN URL, got: ${androidLink.href}`
-  );
-  assert.equal(
-    androidLink.href.includes("github.com/Artisans-Connect"),
-    false,
-    "Should not point to dead GitHub release link"
+    androidLink.href.includes("github.com/Artisans-Connect/artisansApp_frontend/releases"),
+    `Expected GitHub Release CDN URL, got: ${androidLink.href}`
   );
 });
 
-test("resolveDownloadTarget android redirects to Supabase Storage CDN and never dead GitHub link", () => {
+test("resolveDownloadTarget android redirects to GitHub Release CDN asset URL", () => {
   const target = releaseService.resolveDownloadTarget("android");
   assert.ok(target);
   assert.equal(target.filename, "CraftMatch.apk");
   if (target.type === "redirect") {
     assert.ok(
-      target.target.includes("supabase.co/storage/v1/object/public/app-releases") || target.target.startsWith("http"),
+      target.target.includes("github.com/Artisans-Connect/artisansApp_frontend/releases") || target.target.startsWith("http"),
       `Expected valid CDN download target, got: ${target.target}`
-    );
-    assert.equal(
-      target.target.includes("github.com/Artisans-Connect"),
-      false,
-      "Target should never be dead GitHub link"
     );
   }
 });
