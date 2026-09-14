@@ -99,12 +99,12 @@ router.get("/callback", async (req: Request, res: Response) => {
   const autoRedirectScript = isWeb
     ? `
       setTimeout(function() {
-        window.location.href = "${primaryBtnUrl}";
+        window.location.replace("${primaryBtnUrl}");
       }, 3000);
     `
     : `
       // Attempt deep-link automatically on load for mobile app
-      window.location.href = "${primaryBtnUrl}";
+      window.location.replace("${primaryBtnUrl}");
     `;
 
   const descriptionText = isWeb
@@ -204,7 +204,7 @@ router.get("/callback", async (req: Request, res: Response) => {
         <div class="icon">✓</div>
         <h1>Payment Successful!</h1>
         <p>${descriptionText}</p>
-        <a href="${primaryBtnUrl}" class="btn">${primaryBtnLabel}</a>
+        <a href="${primaryBtnUrl}" onclick="window.location.replace('${primaryBtnUrl}'); return false;" class="btn">${primaryBtnLabel}</a>
         <button onclick="closeWindow();" class="btn btn-secondary">Close / Return</button>
       </div>
     </body>

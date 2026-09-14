@@ -13,6 +13,7 @@ const applicationSchema = z.object({
   email: z.string().trim().email(),
   date_of_birth: z.string().trim().optional().nullable(),
   gender: z.string().trim().optional().default(""),
+  ghana_card_pin: z.string().trim().optional().default(""),
   trade_category: z.string().trim().min(1),
   years_of_experience: z.coerce.number().int().min(0).max(60).default(0),
   business_name: z.string().trim().optional().default(""),
@@ -318,6 +319,7 @@ export async function updateVerificationScoreAndFraud(verificationId: string) {
   const refs = refsRes.data ?? [];
 
   let score = 30;
+  const hasGhanaCardPin = Boolean(app.ghana_card_pin && /^GHA-\d{9}-\d$/i.test(String(app.ghana_card_pin).trim()));
   const hasIdFront = docs.some((d) => d.document_type === "id_front");
   const hasIdBack = docs.some((d) => d.document_type === "id_back");
   const hasSelfie = docs.some((d) => d.document_type === "selfie");
@@ -325,8 +327,12 @@ export async function updateVerificationScoreAndFraud(verificationId: string) {
   const hasPortfolio = docs.some((d) => d.document_type === "portfolio");
   const validRefsCount = refs.filter((r) => r.reference_name && r.phone_number).length;
 
-  if (hasIdFront) score += 15;
-  if (hasIdBack) score += 10;
+  if (hasGhanaCardPin) {
+    score += 25; // Valid National ID PIN according to L.I. 2523
+  } else {
+    if (hasIdFront) score += 15;
+    if (hasIdBack) score += 10;
+  }
   if (hasSelfie) score += 15;
   if (hasCert) score += 10;
   if (hasPortfolio) score += 5;
@@ -337,7 +343,7 @@ export async function updateVerificationScoreAndFraud(verificationId: string) {
 
   const fraudIndicators: string[] = [];
   if (!hasSelfie) fraudIndicators.push("missing_selfie");
-  if (!hasIdFront || !hasIdBack) fraudIndicators.push("low_quality_id");
+  if (!hasGhanaCardPin && (!hasIdFront || !hasIdBack)) fraudIndicators.push("missing_id_pin");
   if (validRefsCount === 0) fraudIndicators.push("no_references");
 
   await supabaseAdmin
@@ -378,11 +384,14 @@ export async function submitApplication(userId: string | null, body: unknown) {
 
   const initialValidRefs = input.references.filter((r) => r.reference_name && r.phone_number).length;
   let initialScore = 30;
+  const hasGhanaCardPin = Boolean(input.ghana_card_pin && /^GHA-\d{9}-\d$/i.test(input.ghana_card_pin.trim()));
+  if (hasGhanaCardPin) initialScore += 25;
   if (initialValidRefs >= 2) initialScore += 10;
   if ((input.years_of_experience ?? 0) >= 5) initialScore += 5;
 
   const initialFraud: string[] = [];
-  initialFraud.push("missing_selfie", "low_quality_id");
+  initialFraud.push("missing_selfie");
+  if (!hasGhanaCardPin) initialFraud.push("missing_id_pin");
   if (initialValidRefs === 0) initialFraud.push("no_references");
 
   const verificationPatch = {
@@ -394,6 +403,7 @@ export async function submitApplication(userId: string | null, body: unknown) {
     email: input.email,
     date_of_birth: input.date_of_birth || null,
     gender: input.gender,
+    ghana_card_pin: input.ghana_card_pin || null,
     trade_category: input.trade_category,
     years_of_experience: input.years_of_experience,
     business_name: input.business_name,
@@ -533,13 +543,16 @@ export async function uploadApplicationDocuments(
 
     if (uploadError) throw appError(500, uploadError.message, "DOCUMENT_UPLOAD_FAILED");
 
-    const { data: urlData } = supabaseAdmin.storage.from("verification-docs").getPublicUrl(path);
+    const { data: signedData } = await supabaseAdmin.storage
+      .from("verification-docs")
+      .createSignedUrl(path, 60 * 60);
+
     const { error: insertError } = await supabaseAdmin.from("verification_documents").insert({
       verification_id: verification.id,
       worker_id: workerId,
       document_type: file.document_type,
       storage_path: path,
-      file_url: urlData.publicUrl,
+      file_url: signedData?.signedUrl || "",
       file_name: file.file_name,
       file_size: file.size,
       mime_type: file.mime_type,
@@ -550,7 +563,7 @@ export async function uploadApplicationDocuments(
     uploadedDocuments.push({
       document_type: file.document_type,
       file_name: file.file_name,
-      file_url: urlData.publicUrl,
+      file_url: signedData?.signedUrl || "",
       storage_path: path,
     });
   }
