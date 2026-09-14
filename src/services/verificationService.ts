@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
+import { resolveGhanaPostAddress, isValidGhanaPostCode } from "./ghanaPostGpsService";
 
 const HANDOFF_TTL_MS = 5 * 60 * 1000;
 
@@ -19,6 +20,7 @@ const applicationSchema = z.object({
   business_name: z.string().trim().optional().default(""),
   current_region: z.string().trim().optional().default(""),
   current_city: z.string().trim().optional().default(""),
+  digital_address: z.string().trim().optional().default(""),
   confidence_score: z.coerce.number().int().min(0).max(100).default(0),
   fraud_indicators: z.array(z.string()).default([]),
   references: z
@@ -320,42 +322,56 @@ export async function updateVerificationScoreAndFraud(verificationId: string) {
 
   let score = 30;
   const hasGhanaCardPin = Boolean(app.ghana_card_pin && /^GHA-\d{9}-\d$/i.test(String(app.ghana_card_pin).trim()));
-  const hasIdFront = docs.some((d) => d.document_type === "id_front");
-  const hasIdBack = docs.some((d) => d.document_type === "id_back");
   const hasSelfie = docs.some((d) => d.document_type === "selfie");
-  const hasCert = docs.some((d) => d.document_type === "certification");
-  const hasPortfolio = docs.some((d) => d.document_type === "portfolio");
+  const hasCert = docs.some((d) => d.document_type === "certification" || d.document_type === "training");
+  const portfolioCount = docs.filter((d) => d.document_type === "portfolio").length;
   const validRefsCount = refs.filter((r) => r.reference_name && r.phone_number).length;
+  const isLocationVerified = Boolean(app.location_verified);
 
-  if (hasGhanaCardPin) {
-    score += 25; // Valid National ID PIN according to L.I. 2523
-  } else {
-    if (hasIdFront) score += 15;
-    if (hasIdBack) score += 10;
-  }
-  if (hasSelfie) score += 15;
-  if (hasCert) score += 10;
-  if (hasPortfolio) score += 5;
-  if (validRefsCount >= 2) score += 10;
+  if (hasGhanaCardPin) score += 25; // Valid National ID PIN
+  if (hasSelfie) score += 20; // Portrait face verification
+  if (isLocationVerified) score += 20; // GhanaPost GPS digital address verified
+  if (validRefsCount >= 1) score += 10; // Referee or master craftsman verified
+  if (hasCert) score += 10; // Formal TVET / NVTI / Guild certificate
+  if (portfolioCount >= 1) score += 5; // Portfolio work samples
   if ((app.years_of_experience ?? 0) >= 5) score += 5;
 
   const confidenceScore = Math.min(score, 100);
 
   const fraudIndicators: string[] = [];
   if (!hasSelfie) fraudIndicators.push("missing_selfie");
-  if (!hasGhanaCardPin && (!hasIdFront || !hasIdBack)) fraudIndicators.push("missing_id_pin");
+  if (!hasGhanaCardPin) fraudIndicators.push("missing_id_pin");
   if (validRefsCount === 0) fraudIndicators.push("no_references");
+
+  // Preserve location mismatch if detected during GhanaPostGPS verification
+  const existingFraud = Array.isArray(app.fraud_indicators) ? app.fraud_indicators : [];
+  if (existingFraud.includes("location_mismatch")) {
+    fraudIndicators.push("location_mismatch");
+  }
+
+  // Calculate CraftMatch Suggested Tier:
+  // Level 1: 'identity' (ID Confirmed)
+  // Level 2: 'professional' (CraftMatch Vetted) -> Requires valid PIN, selfie, verified address, and 1+ reference
+  // Level 3: 'premium' (Master Craftsman) -> Requires Level 2 + (Trade cert OR 2+ portfolio samples OR 5+ yrs experience)
+  let suggestedTier = "identity";
+  if (hasGhanaCardPin && hasSelfie && isLocationVerified && validRefsCount >= 1) {
+    suggestedTier = "professional";
+    if (hasCert || portfolioCount >= 2 || (app.years_of_experience ?? 0) >= 5) {
+      suggestedTier = "premium";
+    }
+  }
 
   await supabaseAdmin
     .from("worker_verifications")
     .update({
       confidence_score: confidenceScore,
       fraud_indicators: fraudIndicators,
+      suggested_tier: suggestedTier,
       updated_at: new Date().toISOString(),
     })
     .eq("id", verificationId);
 
-  return { confidenceScore, fraudIndicators };
+  return { confidenceScore, fraudIndicators, suggestedTier };
 }
 
 export async function submitApplication(userId: string | null, body: unknown) {
@@ -386,13 +402,54 @@ export async function submitApplication(userId: string | null, body: unknown) {
   let initialScore = 30;
   const hasGhanaCardPin = Boolean(input.ghana_card_pin && /^GHA-\d{9}-\d$/i.test(input.ghana_card_pin.trim()));
   if (hasGhanaCardPin) initialScore += 25;
-  if (initialValidRefs >= 2) initialScore += 10;
+
+  let gpsLat: number | null = null;
+  let gpsLng: number | null = null;
+  let gpsRegion = "";
+  let gpsDistrict = "";
+  let locationVerified = false;
+  const initialFraud: string[] = [];
+
+  const cleanDigitalAddress = (input.digital_address || "").trim().toUpperCase();
+  if (cleanDigitalAddress) {
+    if (isValidGhanaPostCode(cleanDigitalAddress)) {
+      const gpsLocation = await resolveGhanaPostAddress(cleanDigitalAddress);
+      if (gpsLocation) {
+        gpsLat = gpsLocation.lat;
+        gpsLng = gpsLocation.lng;
+        gpsRegion = gpsLocation.region || "";
+        gpsDistrict = gpsLocation.district || "";
+        locationVerified = true;
+        initialScore += 20;
+
+        // Check for location mismatch between declared region and GPS resolved region
+        if (input.current_region && gpsRegion) {
+          const declared = input.current_region.toLowerCase().replace(/\s+region/g, "").trim();
+          const resolved = gpsRegion.toLowerCase().replace(/\s+region/g, "").trim();
+          if (declared && resolved && !resolved.includes(declared) && !declared.includes(resolved)) {
+            initialFraud.push("location_mismatch");
+          }
+        }
+      } else {
+        initialFraud.push("unresolvable_digital_address");
+      }
+    } else {
+      initialFraud.push("invalid_digital_address_format");
+    }
+  }
+
+  if (initialValidRefs >= 1) initialScore += 10;
   if ((input.years_of_experience ?? 0) >= 5) initialScore += 5;
 
-  const initialFraud: string[] = [];
   initialFraud.push("missing_selfie");
   if (!hasGhanaCardPin) initialFraud.push("missing_id_pin");
   if (initialValidRefs === 0) initialFraud.push("no_references");
+
+  // Determine initial suggested tier (CraftMatch: identity -> ID Confirmed, professional -> CraftMatch Vetted)
+  let suggestedTier = "identity";
+  if (hasGhanaCardPin && locationVerified && initialValidRefs >= 1) {
+    suggestedTier = "professional";
+  }
 
   const verificationPatch = {
     worker_id: workerId,
@@ -409,7 +466,14 @@ export async function submitApplication(userId: string | null, body: unknown) {
     business_name: input.business_name,
     current_region: input.current_region,
     current_city: input.current_city,
-    confidence_score: initialScore,
+    digital_address: cleanDigitalAddress,
+    gps_lat: gpsLat,
+    gps_lng: gpsLng,
+    gps_region: gpsRegion,
+    gps_district: gpsDistrict,
+    location_verified: locationVerified,
+    suggested_tier: suggestedTier,
+    confidence_score: Math.min(initialScore, 100),
     fraud_indicators: initialFraud,
     submitted_at: new Date().toISOString(),
     reviewed_at: null,
@@ -664,8 +728,25 @@ async function syncApprovedVerificationToAccount(verification: Record<string, an
   }
 
   const years = Number(verification.years_of_experience ?? 0);
+  const level = verification.verification_level || "identity";
+  const badges: string[] = ["id_reviewed"];
+  if (verification.digital_address && verification.location_verified) {
+    badges.push("address_confirmed");
+  }
+  if (level === "professional" || level === "premium") {
+    badges.push("references_checked");
+  }
+  if (level === "premium") {
+    badges.push("trade_certified");
+  }
+
   const workerPatch: Record<string, unknown> = {
     is_verified: true,
+    verification_level: level,
+    digital_address: verification.digital_address || "",
+    gps_lat: verification.gps_lat || null,
+    gps_lng: verification.gps_lng || null,
+    verified_badges: badges,
     skills,
     service_areas: serviceAreas,
     updated_at: now,

@@ -20,6 +20,7 @@ import walletRouter from "./wallet";
 import disputesRouter from "./disputes";
 import payoutsRouter from "./payouts";
 import placesRouter from "./places";
+import { locationRouter } from "./location";
 
 const router = Router();
 
@@ -37,6 +38,7 @@ router.use("/admin", adminRouter);
 router.use("/search", searchRouter);
 router.use("/trades", tradesRouter);
 router.use("/places", placesRouter);
+router.use("/location", locationRouter);
 router.use("/releases", releasesRouter);
 router.use("/payments", paymentsRouter);
 router.use("/reports", reportsRouter);
