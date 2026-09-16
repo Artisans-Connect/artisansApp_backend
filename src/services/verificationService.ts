@@ -3,6 +3,7 @@ import { z } from "zod";
 import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
 import { resolveGhanaPostAddress, isValidGhanaPostCode } from "./ghanaPostGpsService";
+import { searchGnhrMember, isGnhrConfigured, GnhrMemberRecord } from "./gnhrService";
 
 const HANDOFF_TTL_MS = 5 * 60 * 1000;
 
@@ -21,6 +22,10 @@ const applicationSchema = z.object({
   current_region: z.string().trim().optional().default(""),
   current_city: z.string().trim().optional().default(""),
   digital_address: z.string().trim().optional().default(""),
+  workshop_address: z.string().trim().optional().default(""),
+  workshop_digital_address: z.string().trim().optional().default(""),
+  gnhr_region_code: z.string().trim().optional().default(""),
+  gnhr_district_code: z.string().trim().optional().default(""),
   confidence_score: z.coerce.number().int().min(0).max(100).default(0),
   fraud_indicators: z.array(z.string()).default([]),
   references: z
@@ -33,6 +38,7 @@ const applicationSchema = z.object({
     )
     .default([]),
 });
+
 
 const documentUploadSchema = z.object({
   handoff_code: z.string().min(16).optional(),
@@ -343,10 +349,13 @@ export async function updateVerificationScoreAndFraud(verificationId: string) {
   if (!hasGhanaCardPin) fraudIndicators.push("missing_id_pin");
   if (validRefsCount === 0) fraudIndicators.push("no_references");
 
-  // Preserve location mismatch if detected during GhanaPostGPS verification
+  // Preserve location and district mismatch if detected during GhanaPostGPS verification
   const existingFraud = Array.isArray(app.fraud_indicators) ? app.fraud_indicators : [];
   if (existingFraud.includes("location_mismatch")) {
     fraudIndicators.push("location_mismatch");
+  }
+  if (existingFraud.includes("district_mismatch")) {
+    fraudIndicators.push("district_mismatch");
   }
 
   // Calculate CraftMatch Suggested Tier:
@@ -430,6 +439,15 @@ export async function submitApplication(userId: string | null, body: unknown) {
             initialFraud.push("location_mismatch");
           }
         }
+
+        // Check for district mismatch between declared city/district and GPS resolved district
+        if (input.current_city && gpsDistrict) {
+          const declaredCity = input.current_city.toLowerCase().replace(/\s+(municipal|metropolitan|district|north|south|east|west)/g, "").trim();
+          const resolvedDistrict = gpsDistrict.toLowerCase().replace(/\s+(municipal|metropolitan|district|north|south|east|west)/g, "").trim();
+          if (declaredCity && resolvedDistrict && !resolvedDistrict.includes(declaredCity) && !declaredCity.includes(resolvedDistrict)) {
+            initialFraud.push("district_mismatch");
+          }
+        }
       } else {
         initialFraud.push("unresolvable_digital_address");
       }
@@ -451,6 +469,44 @@ export async function submitApplication(userId: string | null, body: unknown) {
     suggestedTier = "professional";
   }
 
+  // Perform GNHR Government Social Registry check if credentials are configured
+  let gnhrVerified = false;
+  let gnhrMemberUuid = "";
+  let gnhrData: any = null;
+  let gnhrCheckedAt: string | null = null;
+  let gnhrMatchStatus = "UNCHECKED";
+
+  if (hasGhanaCardPin) {
+    if (isGnhrConfigured()) {
+      try {
+        const gnhrResult = await searchGnhrMember(input.ghana_card_pin!.trim());
+        gnhrCheckedAt = new Date().toISOString();
+        if (gnhrResult.successful && gnhrResult.member) {
+          gnhrMemberUuid = gnhrResult.member.member_uuid;
+          gnhrData = gnhrResult.member;
+
+          const declared = input.full_name.toLowerCase();
+          const gFirst = (gnhrResult.member.mm_member_firstname || "").toLowerCase();
+          const gLast = (gnhrResult.member.mm_member_lastname || "").toLowerCase();
+          if (gFirst && gLast && (declared.includes(gFirst) || declared.includes(gLast))) {
+            gnhrVerified = true;
+            gnhrMatchStatus = "VERIFIED";
+            initialScore += 15;
+          } else {
+            gnhrMatchStatus = "MISMATCH";
+            initialFraud.push("gnhr_name_mismatch");
+          }
+        } else {
+          gnhrMatchStatus = "NOT_FOUND";
+        }
+      } catch (_gnhrErr) {
+        gnhrMatchStatus = "LOOKUP_ERROR";
+      }
+    } else {
+      gnhrMatchStatus = "RESERVED";
+    }
+  }
+
   const verificationPatch = {
     worker_id: workerId,
     status: "pending" as VerificationStatus,
@@ -467,6 +523,15 @@ export async function submitApplication(userId: string | null, body: unknown) {
     current_region: input.current_region,
     current_city: input.current_city,
     digital_address: cleanDigitalAddress,
+    workshop_address: input.workshop_address || "",
+    workshop_digital_address: input.workshop_digital_address || cleanDigitalAddress,
+    gnhr_region_code: input.gnhr_region_code || "",
+    gnhr_district_code: input.gnhr_district_code || "",
+    gnhr_verified: gnhrVerified,
+    gnhr_member_uuid: gnhrMemberUuid,
+    gnhr_data: gnhrData,
+    gnhr_checked_at: gnhrCheckedAt,
+    gnhr_match_status: gnhrMatchStatus,
     gps_lat: gpsLat,
     gps_lng: gpsLng,
     gps_region: gpsRegion,
@@ -482,6 +547,7 @@ export async function submitApplication(userId: string | null, body: unknown) {
     more_info_message: "",
     updated_at: new Date().toISOString(),
   };
+
 
   const query = existing
     ? supabaseAdmin.from("worker_verifications").update(verificationPatch).eq("id", existing.id).select().single()
@@ -910,3 +976,70 @@ export async function getPublicPortalStats() {
     regionsCount,
   };
 }
+
+export async function checkGnhrForApplication(verificationId: string) {
+  const { data: app, error } = await supabaseAdmin
+    .from("worker_verifications")
+    .select("*")
+    .eq("id", verificationId)
+    .maybeSingle();
+
+  if (error) throw appError(500, error.message, "VERIFICATION_FETCH_FAILED");
+  if (!app) throw appError(404, "Verification application not found", "NOT_FOUND");
+
+  const pin = (app.ghana_card_pin || "").trim();
+  if (!pin) {
+    throw appError(400, "Application has no Ghana Card PIN to cross-reference", "MISSING_ID_PIN");
+  }
+
+  let gnhrVerified = false;
+  let gnhrMemberUuid = "";
+  let gnhrData: any = null;
+  const gnhrCheckedAt = new Date().toISOString();
+  let gnhrMatchStatus = "UNCHECKED";
+
+  if (isGnhrConfigured()) {
+    const result = await searchGnhrMember(pin);
+    if (result.successful && result.member) {
+      gnhrMemberUuid = result.member.member_uuid;
+      gnhrData = result.member;
+      const declared = (app.full_name || "").toLowerCase();
+      const gFirst = (result.member.mm_member_firstname || "").toLowerCase();
+      const gLast = (result.member.mm_member_lastname || "").toLowerCase();
+      if (gFirst && gLast && (declared.includes(gFirst) || declared.includes(gLast))) {
+        gnhrVerified = true;
+        gnhrMatchStatus = "VERIFIED";
+      } else {
+        gnhrMatchStatus = "MISMATCH";
+      }
+    } else {
+      gnhrMatchStatus = "NOT_FOUND";
+    }
+  } else {
+    gnhrMatchStatus = "RESERVED";
+  }
+
+  await supabaseAdmin
+    .from("worker_verifications")
+    .update({
+      gnhr_verified: gnhrVerified,
+      gnhr_member_uuid: gnhrMemberUuid,
+      gnhr_data: gnhrData,
+      gnhr_checked_at: gnhrCheckedAt,
+      gnhr_match_status: gnhrMatchStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", verificationId);
+
+  await supabaseAdmin.from("verification_audit_logs").insert({
+    verification_id: verificationId,
+    worker_id: app.worker_id,
+    admin_name: "Portal Admin",
+    action: "gnhr_checked",
+    notes: `GNHR Registry check completed with status: ${gnhrMatchStatus}`,
+  });
+
+  await updateVerificationScoreAndFraud(verificationId);
+  return getApplicationBundle(verificationId);
+}
+

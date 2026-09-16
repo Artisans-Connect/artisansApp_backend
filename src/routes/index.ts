@@ -21,6 +21,7 @@ import disputesRouter from "./disputes";
 import payoutsRouter from "./payouts";
 import placesRouter from "./places";
 import { locationRouter } from "./location";
+import businessInquiriesRouter from "./businessInquiries";
 
 const router = Router();
 
@@ -46,9 +47,11 @@ router.use("/reports", reportsRouter);
 // Mounted as its own router so the authenticated /reports routes keep their
 // blanket authMiddleware untouched.
 router.use("/public/reports", publicReportsRouter);
+router.use("/business-inquiries", businessInquiriesRouter);
 router.use("/negotiations", negotiationsRouter);
 router.use("/wallet", walletRouter);
 router.use("/disputes", disputesRouter);
 router.use("/payouts", payoutsRouter);
 
 export default router;
+

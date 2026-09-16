@@ -3,7 +3,17 @@ import { JOB_MODE, JOB_STATUS } from "../constants/enums";
 
 const jobMode = z.enum([JOB_MODE.ASAP, JOB_MODE.SCHEDULED, JOB_MODE.FLEXIBLE]);
 const budgetType = z.enum(["fixed", "range", "negotiable"]);
-const serviceType = z.enum(["home_visit", "remote", "either"]);
+const serviceType = z.enum(["home_visit", "workshop", "pickup_delivery", "remote", "either"]);
+const jobArchetype = z.enum([
+  "rapid_repair",
+  "diagnostic",
+  "fixed_scope",
+  "area_quantity",
+  "custom_build",
+  "appointment",
+  "event_rental",
+  "multi_stage_project",
+]);
 
 export const createJobSchema = z
   .object({
@@ -15,12 +25,17 @@ export const createJobSchema = z
     location_lng: z.number().min(-180).max(180),
     address_label: z.string().trim().min(1),
     job_mode: jobMode,
+    job_archetype: jobArchetype.optional().default("fixed_scope"),
     budget_type: budgetType,
     budget_fixed: z.number().positive().optional(),
     budget_min: z.number().positive().optional(),
     budget_max: z.number().positive().optional(),
+    diagnostic_fee: z.number().positive().optional(),
     scheduled_for: z.string().datetime().optional(),
-    service_type: serviceType,
+    service_type: serviceType.default("home_visit"),
+    landmark_description: z.string().trim().max(300).optional(),
+    milestone_stages: z.array(z.record(z.string(), z.unknown())).optional(),
+    archetype_payload: z.record(z.string(), z.unknown()).optional(),
     requested_worker_id: z.string().uuid().optional(),
   })
   .superRefine((data, ctx) => {

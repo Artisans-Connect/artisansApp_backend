@@ -14,6 +14,8 @@ const estimateSchema = z.object({
   location_lat: z.number().min(-90).max(90),
   location_lng: z.number().min(-180).max(180),
   job_mode: z.enum(["asap", "scheduled", "flexible"]),
+  job_archetype: z.string().optional().nullable(),
+  jobArchetype: z.string().optional().nullable(),
 });
 
 router.post(
@@ -29,8 +31,18 @@ router.post(
       );
     }
 
-    const { category_id, subcategory_id, subcategoryId, location_lat, location_lng, job_mode } = parsed.data;
+    const {
+      category_id,
+      subcategory_id,
+      subcategoryId,
+      location_lat,
+      location_lng,
+      job_mode,
+      job_archetype,
+      jobArchetype,
+    } = parsed.data;
     const resolvedSubcatId = subcategory_id ?? subcategoryId;
+    const resolvedArchetype = job_archetype ?? jobArchetype;
 
     const estimate = await pricingService.estimateFee(
       category_id,
@@ -38,6 +50,7 @@ router.post(
       location_lng,
       job_mode,
       resolvedSubcatId,
+      resolvedArchetype,
     );
 
     res.status(200).json({ success: true, data: estimate });

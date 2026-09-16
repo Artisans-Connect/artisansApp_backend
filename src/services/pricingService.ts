@@ -4,6 +4,7 @@ import { supabaseAdmin } from "../config/supabase";
 const URGENCY_PREMIUM_PERCENT = 0.20; // +20% for ASAP
 const ABSOLUTE_MINIMUM_FEE = 40; // Floor in GH₵
 const DEFAULT_BASE_FEE = 60; // Fallback if category has no base_fee
+const DIAGNOSTIC_CALLOUT_FEE = 40; // Standard diagnostic inspection callout fee in GH₵
 
 export interface FeeBreakdown {
   base_service_fee: number;
@@ -24,7 +25,21 @@ export async function estimateFee(
   locationLng: number,
   jobMode: string,
   subcategoryId?: string | null,
+  jobArchetype?: string | null,
 ): Promise<FeeEstimate> {
+  // If this is a diagnostic inspection visit, charge the standard diagnostic callout fee
+  if (jobArchetype === "diagnostic") {
+    return {
+      minimum_fee: DIAGNOSTIC_CALLOUT_FEE,
+      breakdown: {
+        base_service_fee: DIAGNOSTIC_CALLOUT_FEE,
+        distance_cost: 0,
+        urgency_premium: 0,
+        verification_premium: 0,
+        verified_worker_market_premium: 0,
+      },
+    };
+  }
   // 1. Look up base fee: check subcategory base_fee first, then parent category base_fee
   let resolvedBaseFee: number | null = null;
 

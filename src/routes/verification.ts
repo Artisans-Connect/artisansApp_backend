@@ -109,6 +109,16 @@ router.patch(
 );
 
 router.post(
+  "/admin/applications/:id/gnhr-check",
+  requirePortalAdmin,
+  catchAsync(async (req: Request, res: Response) => {
+    const bundle = await verificationService.checkGnhrForApplication(paramId(req.params.id));
+    res.status(200).json({ success: true, data: bundle });
+  }),
+);
+
+
+router.post(
   "/me/application",
   catchAsync(async (req: Request, res: Response) => {
     const userId = await readBearerUserId(req);
