@@ -402,12 +402,10 @@ export async function activateDueScheduledJobs(
     const slotPassed = job.scheduled_for && new Date(job.scheduled_for).getTime() <= now.getTime();
     if (!slotPassed) continue;
 
-    const { data: released, error: releaseError } = await supabaseAdmin
+    const { data: updatedJob, error: releaseError } = await supabaseAdmin
       .from("jobs")
       .update({
-        status: JOB_STATUS.SEARCHING,
-        worker_id: null,
-        requested_worker_id: null,
+        status: JOB_STATUS.SCHEDULED_ACTION_REQUIRED,
         updated_at: now.toISOString(),
       })
       .eq("id", job.id)
@@ -416,15 +414,14 @@ export async function activateDueScheduledJobs(
       .maybeSingle();
 
     if (releaseError) {
-      logger(`scheduled activation release warning: ${releaseError.message}`);
+      logger(`scheduled activation status update warning: ${releaseError.message}`);
       continue;
     }
-    if (!released) continue;
+    if (!updatedJob) continue;
 
     if (job.worker_id) {
       await notifyService.notifyScheduledActivationBlocked(job.client_id, job.worker_id, job.id);
     }
-    void findAndDispatch(job.id, 1);
   }
 
   const { data: unconfirmedJobs, error: unconfirmedError } = await supabaseAdmin

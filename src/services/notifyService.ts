@@ -261,13 +261,13 @@ export async function notifyScheduledActivationBlocked(
   jobId: string,
 ): Promise<void> {
   await sendToUser(clientId, {
-    title: "Scheduled artisan unavailable",
-    body: "Your scheduled artisan is busy with another job. We are finding you a replacement.",
+    title: "Action required: Scheduled artisan delayed",
+    body: "Your scheduled artisan hasn't confirmed readiness. Tap to choose a replacement, message them, or get an instant refund.",
     data: buildNotificationData("scheduled_activation_blocked", { jobId, roleTarget: "client" }),
   });
   await sendToUser(workerId, {
-    title: "Scheduled job released",
-    body: "You were still on another job at the scheduled time, so the job was opened to other artisans.",
+    title: "Scheduled booking attention needed",
+    body: "Your scheduled booking time has arrived. If you are delayed, please message the client directly in the app.",
     data: buildNotificationData("scheduled_activation_blocked", { jobId, roleTarget: "worker" }),
   });
 }

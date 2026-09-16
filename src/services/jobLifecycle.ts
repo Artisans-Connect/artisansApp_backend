@@ -18,6 +18,7 @@ export const WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES = [
 export const WORKER_RECOVERABLE_JOB_STATUSES = [
   ...WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
   JOB_STATUS.SCHEDULED_CONFIRMED,
+  JOB_STATUS.SCHEDULED_ACTION_REQUIRED,
 ] as const;
 
 export const WORKER_EXCLUSIVE_SERVICE_TYPES = ["home_visit", "pickup_delivery"] as const;
@@ -75,6 +76,7 @@ export function isRecoverableServiceInterruption(
   cancelledBy: string | null | undefined,
   cancellationStage: string | null | undefined,
 ): boolean {
+  if (status === JOB_STATUS.SCHEDULED_ACTION_REQUIRED) return true;
   if (status !== JOB_STATUS.CANCELLED) return false;
   return cancelledBy === "worker" || cancellationStage === "termination_requested";
 }

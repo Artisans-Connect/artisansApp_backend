@@ -6,6 +6,8 @@ export const JOB_STATUS = {
   MATCHED: "matched",
   /** Worker accepted a scheduled job; does NOT block other work until activation. */
   SCHEDULED_CONFIRMED: "scheduled_confirmed",
+  /** Scheduled artisan delayed or unconfirmed; client action required. */
+  SCHEDULED_ACTION_REQUIRED: "scheduled_action_required",
   ON_THE_WAY: "on_the_way",
   ARRIVED: "arrived",
   IN_PROGRESS: "in_progress",
