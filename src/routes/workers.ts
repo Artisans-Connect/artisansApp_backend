@@ -71,11 +71,11 @@ router.put(
 );
 
 router.get(
-  "/me/active-job",
+  "/me/active-jobs",
   authMiddleware,
   catchAsync(async (req: Request, res: Response) => {
-    const job = await workersService.getActiveJob(req.user!.id);
-    res.status(200).json({ success: true, data: job });
+    const jobs = await workersService.getActiveJobs(req.user!.id);
+    res.status(200).json({ success: true, data: jobs });
   }),
 );
 

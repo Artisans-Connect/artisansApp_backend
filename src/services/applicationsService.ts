@@ -3,6 +3,7 @@ import { supabaseAdmin } from "../config/supabase";
 import { appError } from "../utils/appError";
 import {
   WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
+  WORKER_EXCLUSIVE_SERVICE_TYPES,
   isWorkerActiveJobConstraintError,
 } from "./jobLifecycle";
 import * as matchingService from "./matchingService";
@@ -27,12 +28,16 @@ function readApplicationInput(body?: ApplyToJobInput) {
   };
 }
 
-async function ensureWorkerHasNoActiveJob(workerId: string, currentJobId?: string) {
+async function ensureWorkerCanAcceptJob(workerId: string, jobServiceType: string, currentJobId?: string) {
+  // If the new job is not an exclusive job, it can be queued concurrently.
+  if (!WORKER_EXCLUSIVE_SERVICE_TYPES.includes(jobServiceType as any)) return;
+
   let query = supabaseAdmin
     .from("jobs")
     .select("id", { count: "exact", head: true })
     .eq("worker_id", workerId)
-    .in("status", [...WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES]);
+    .in("status", [...WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES])
+    .in("service_type", [...WORKER_EXCLUSIVE_SERVICE_TYPES]);
 
   if (currentJobId) {
     query = query.neq("id", currentJobId);
@@ -41,14 +46,14 @@ async function ensureWorkerHasNoActiveJob(workerId: string, currentJobId?: strin
   const { count, error } = await query;
   if (error) throw appError(500, error.message, "ACTIVE_JOB_CHECK_FAILED");
   if ((count ?? 0) > 0) {
-    throw appError(409, "This worker already has an active or approval-pending job", "WORKER_HAS_ACTIVE_JOB");
+    throw appError(409, "This worker already has an active or approval-pending exclusive job", "WORKER_HAS_ACTIVE_JOB");
   }
 }
 
 export async function applyToJob(workerId: string, jobId: string, body?: ApplyToJobInput) {
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
-    .select("id, client_id, status, worker_id, job_mode, excluded_worker_ids")
+    .select("id, client_id, status, worker_id, job_mode, service_type, excluded_worker_ids")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -71,7 +76,7 @@ export async function applyToJob(workerId: string, jobId: string, body?: ApplyTo
   // nothing about the scheduled slot) and are open from the explore board
   // without a dispatch round.
   if (!isScheduled) {
-    await ensureWorkerHasNoActiveJob(workerId);
+    await ensureWorkerCanAcceptJob(workerId, job.service_type);
 
     const { data: dispatch } = await supabaseAdmin
       .from("job_dispatches")
@@ -215,7 +220,7 @@ export async function acceptApplication(clientId: string, jobId: string, applica
 
   const { data: job, error: jobError } = await supabaseAdmin
     .from("jobs")
-    .select("id, client_id, status, worker_id, job_mode")
+    .select("id, client_id, status, worker_id, job_mode, service_type")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -230,7 +235,7 @@ export async function acceptApplication(clientId: string, jobId: string, applica
   // worker's current workload is irrelevant here.
   const isScheduled = job.job_mode === JOB_MODE.SCHEDULED;
   if (!isScheduled) {
-    await ensureWorkerHasNoActiveJob(application.worker_id, jobId);
+    await ensureWorkerCanAcceptJob(application.worker_id, job.service_type, jobId);
   }
   const nextStatus = JOB_STATUS.AWAITING_PAYMENT;
 

@@ -55,7 +55,8 @@ export const createJobSchema = z
   });
 
 export function initialJobStatus(jobMode: string): string {
-  if (jobMode === JOB_MODE.SCHEDULED) return JOB_STATUS.DRAFT;
+  // Scheduled jobs are visible/searchable at creation so workers can discover
+  // and bid or plan ahead; they only become an active assignment near the scheduled time.
   return JOB_STATUS.SEARCHING;
 }
 

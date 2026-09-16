@@ -35,17 +35,18 @@ export async function declineJob(userId: string, jobId: string) {
   return { success: true };
 }
 
-export async function getActiveJob(userId: string) {
+export async function getActiveJobs(userId: string) {
   const { data, error } = await supabaseAdmin
     .from("jobs")
     .select("*, client:profiles!jobs_client_id_fkey(full_name, avatar_url, phone), categories(name, icon_name, color_hex), completion_details:job_completion_details(hours_spent, materials_used, notes, photo_urls, created_at, base_rate, distance_cost, urgency_premium, gross_amount, platform_fee, artisan_payout)")
     .eq("worker_id", userId)
     .in("status", WORKER_RECOVERABLE_JOB_STATUSES)
-    .order("updated_at", { ascending: false })
-    .maybeSingle();
+    .order("updated_at", { ascending: false });
 
   if (error) throw appError(500, error.message, "ACTIVE_JOB_FETCH_FAILED");
-  return data ? enrichActiveJobWithAcceptedQuote(data, userId) : data;
+  if (!data) return [];
+  
+  return Promise.all(data.map(job => enrichActiveJobWithAcceptedQuote(job, userId)));
 }
 
 async function enrichActiveJobWithAcceptedQuote<T extends { id: string }>(

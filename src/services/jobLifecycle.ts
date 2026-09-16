@@ -15,9 +15,14 @@ export const WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES = [
   JOB_STATUS.PENDING_CLIENT_APPROVAL,
 ] as const;
 
-export const WORKER_RECOVERABLE_JOB_STATUSES = WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES;
+export const WORKER_RECOVERABLE_JOB_STATUSES = [
+  ...WORKER_ASSIGNMENT_BLOCKING_JOB_STATUSES,
+  JOB_STATUS.SCHEDULED_CONFIRMED,
+] as const;
 
-export const WORKER_ACTIVE_JOB_CONSTRAINT_NAME = "one_active_worker_job_per_worker";
+export const WORKER_EXCLUSIVE_SERVICE_TYPES = ["home_visit", "pickup_delivery"] as const;
+
+export const WORKER_ACTIVE_JOB_CONSTRAINT_NAME = "one_exclusive_worker_job_per_worker";
 
 export const REDISPATCH_BLOCKING_DISPATCH_STATUSES = ["sent", "seen", "accepted"] as const;
 
